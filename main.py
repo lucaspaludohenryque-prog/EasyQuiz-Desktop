@@ -1,7 +1,7 @@
 """
 Ponto de Entrada Principal - Mastering Study Quiz
-Inicializa compatibilidade de DPI no Windows, instancia os serviços locais do Cérebro
-e inicializa a interface gráfica em modo claro padrão.
+Inicializa o reconhecimento de DPI no Windows, instancia os serviços locais
+e dispara a interface gráfica no formato vertical dockable.
 """
 
 import sys
@@ -10,11 +10,12 @@ import ctypes
 from config_manager import ConfigManager
 from ai_vision import AIVisionService
 from cerebro_manager import CerebroManager
+from metrics_tracker import MetricsTracker
 from gui import MasteringStudyQuizGUI
 
 
 def setup_windows_dpi_awareness() -> None:
-    """Configura o reconhecimento de DPI do Windows para garantir precisão nas coordenadas do RPA."""
+    """Configura o reconhecimento de DPI do Windows para alinhamento sub-pixel no RPA."""
     if sys.platform.startswith("win"):
         try:
             # PROCESS_PER_MONITOR_DPI_AWARE
@@ -27,27 +28,27 @@ def setup_windows_dpi_awareness() -> None:
 
 
 def main() -> None:
-    """Função principal de inicialização da aplicação."""
+    """Inicialização dos serviços e do loop principal de interface."""
     setup_windows_dpi_awareness()
 
     # Gerenciador de configurações locais (config.json)
     config_mgr = ConfigManager("config.json")
 
-    # Gerenciador do Cérebro (Cerebro_Dados/ e database_cerebro.json)
+    # Gerenciador de pastas físicas e sessões (Cerebro_Dados/)
     cerebro_mgr = CerebroManager()
 
-    # Serviço de IA Multimodal
-    ai_service = AIVisionService(
-        provider=config_mgr.get("api_provider", "gemini"),
-        api_key=config_mgr.get("api_key", ""),
-        model_name=config_mgr.get("model_name", "gemini-2.5-flash")
-    )
+    # Rastreador de cronômetro, tokens e métricas
+    metrics_trk = MetricsTracker()
 
-    # Inicializa e executa a interface gráfica
+    # Serviço de IA Multimodal com suporte a rotação de chaves
+    ai_service = AIVisionService(config_manager=config_mgr)
+
+    # Inicialização da Interface Gráfica Vertical Dockable
     app = MasteringStudyQuizGUI(
         config_manager=config_mgr,
         ai_service=ai_service,
-        cerebro_manager=cerebro_mgr
+        cerebro_manager=cerebro_mgr,
+        metrics_tracker=metrics_trk
     )
     app.mainloop()
 
