@@ -1,0 +1,21 @@
+{
+    "api_provider": "gemini",
+    "api_key": "SUA_API_KEY_AQUI",
+    "model_name": "gemini-2.5-flash",
+    "quiz_region": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0,
+        "configured": false
+    },
+    "next_button": {
+        "x": 0,
+        "y": 0,
+        "configured": false
+    },
+    "action_delay": 2.5,
+    "transition_delay": 1.5,
+    "auto_advance": true,
+    "smooth_mouse": true
+}
