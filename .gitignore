@@ -22,3 +22,12 @@ ENV/
 Thumbs.db
 desktop.ini
 *.log
+
+# Brain Local Storage & Folders
+brain_storage/
+Cerebro_Dados/
+*.db
+*.db-wal
+*.db-shm
+
+

@@ -1,537 +1,1028 @@
 """
-Módulo de Interface Gráfica Moderna (GUI) - EasyQuiz Desktop
-Desenvolvido em CustomTkinter com modo escuro nativo, calibração visual e logs em tempo real.
+Interface Gráfica Moderna (GUI) - Mastering Study Quiz
+Construída com CustomTkinter, padrão Tema Claro (Clean White) com alternância rápida para Dark Mode,
+sidebar minimalista, monitor do Cérebro em Tempo Real e galeria de cards com filtro e busca.
 """
 
+import os
 import datetime
 import tkinter as tk
-from typing import Optional
+from typing import Optional, List, Dict
+from PIL import Image
 import customtkinter as ctk
 
 from config_manager import ConfigManager
-from ai_service import AIService
+from ai_vision import AIVisionService
+from cerebro_manager import CerebroManager, CerebroItem
 from automation import AutomationEngine
 from overlay import ScreenAreaSelector, PointSelector
 
-# Configuração global de aparência
-ctk.set_appearance_mode("Dark")
+# Configuração inicial: Modo Claro padrão por especificação do projeto
+ctk.set_appearance_mode("Light")
 ctk.set_default_color_theme("blue")
 
 
-class EasyQuizGUI(ctk.CTk):
-    """Janela principal da aplicação desktop EasyQuiz."""
+class MasteringStudyQuizGUI(ctk.CTk):
+    """Janela principal do aplicativo Mastering Study Quiz."""
 
-    def __init__(self, config_manager: ConfigManager, ai_service: AIService):
+    def __init__(
+        self,
+        config_manager: ConfigManager,
+        ai_service: AIVisionService,
+        cerebro_manager: CerebroManager
+    ):
         super().__init__()
 
         self.config_manager = config_manager
         self.ai_service = ai_service
+        self.cerebro_manager = cerebro_manager
 
-        # Inicialização do motor de automação
+        # Motor de automação RPA com callbacks para a GUI
         self.engine = AutomationEngine(
             config_manager=self.config_manager,
             ai_service=self.ai_service,
+            cerebro_manager=self.cerebro_manager,
             log_callback=self.enqueue_log,
-            status_callback=self.update_status_badge
+            status_callback=self.update_status_badge,
+            live_cerebro_callback=self.update_live_cerebro_card
         )
 
         # Configurações da Janela
-        self.title("EasyQuiz Desktop - Automação Inteligente de Quizzes")
-        self.geometry("1060x780")
-        self.minsize(980, 700)
+        self.title("Mastering Study Quiz - Automação Inteligente & Memória Visual")
+        self.geometry("1160x820")
+        self.minsize(1040, 740)
 
-        # Configura grid responsivo
-        self.grid_columnconfigure(0, weight=1)
+        # Configura grid mestre (Sidebar fixa + Conteúdo dinâmico)
         self.grid_columnconfigure(1, weight=1)
-        self.grid_rowconfigure(1, weight=1)
+        self.grid_rowconfigure(0, weight=1)
 
-        # Construção dos componentes visuais
-        self._build_header()
-        self._build_left_panel()
-        self._build_right_panel()
+        # Variáveis de controle de visualização
+        self.current_theme = ctk.StringVar(value="Light")
+        self.search_query_var = ctk.StringVar()
+        self.selected_category_filter = "Todos"
+        self.cached_images: Dict[str, ctk.CTkImage] = {}
 
-        # Vinculação de Hotkeys Globais e Locais
+        # Construção da Interface
+        self._build_sidebar()
+        self._build_content_area()
         self._setup_hotkeys()
+        self._load_saved_settings()
 
-        # Carrega dados salvos para a interface
-        self._load_saved_ui_state()
+        # Seleciona a aba padrão Dashboard
+        self._switch_tab("dashboard")
 
-        # Protocolo de fechamento
+        # Protocolo de encerramento seguro
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        self.enqueue_log("Sistema EasyQuiz Desktop inicializado com sucesso.", "SUCCESS")
-        self.enqueue_log("Pressione [F8] para Iniciar/Pausar e [ESC] para Parada de Emergência.", "INFO")
+        self.enqueue_log("Mastering Study Quiz inicializado com sucesso.", "SUCCESS")
+        self.enqueue_log("Padrão: Tema Claro (Clean White). Atalhos: [F8] Iniciar/Pausar | [ESC] Parar.", "INFO")
 
-    def _build_header(self) -> None:
-        """Cria a barra superior de cabeçalho e indicador de status."""
-        header_frame = ctk.CTkFrame(self, corner_radius=12, fg_color="#181B20")
-        header_frame.grid(row=0, column=0, columnspan=2, padx=16, pady=(16, 8), sticky="ew")
+    # =========================================================================
+    # BARRA LATERAL (SIDEBAR DE NAVEGAÇÃO)
+    # =========================================================================
+    def _build_sidebar(self) -> None:
+        """Cria a barra lateral de navegação com logotipo, botões de abas e seletor de tema."""
+        self.sidebar_frame = ctk.CTkFrame(self, width=220, corner_radius=0)
+        self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
+        self.sidebar_frame.grid_rowconfigure(4, weight=1)
 
-        # Título e Descrição
-        title_box = ctk.CTkFrame(header_frame, fg_color="transparent")
-        title_box.pack(side="left", padx=16, pady=12)
+        # Logo / Título
+        logo_box = ctk.CTkFrame(self.sidebar_frame, fg_color="transparent")
+        logo_box.grid(row=0, column=0, padx=20, pady=(24, 16), sticky="w")
 
-        title_label = ctk.CTkLabel(
-            title_box,
-            text="EASYQUIZ DESKTOP",
-            font=ctk.CTkFont(family="Segoe UI", size=22, weight="bold"),
-            text_color="#00E5FF"
+        lbl_app_name = ctk.CTkLabel(
+            logo_box,
+            text="MASTERING",
+            font=ctk.CTkFont(family="Segoe UI", size=20, weight="bold"),
+            text_color="#1E88E5"
         )
-        title_label.pack(anchor="w")
+        lbl_app_name.pack(anchor="w")
 
-        subtitle_label = ctk.CTkLabel(
-            title_box,
-            text="Automação Inteligente com Visão Computacional e IA Multimodal",
-            font=ctk.CTkFont(family="Segoe UI", size=12),
-            text_color="#90A4AE"
+        lbl_app_sub = ctk.CTkLabel(
+            logo_box,
+            text="Study Quiz Desktop",
+            font=ctk.CTkFont(family="Segoe UI", size=13),
+            text_color="#546E7A"
         )
-        subtitle_label.pack(anchor="w")
+        lbl_app_sub.pack(anchor="w")
 
-        # Badge de Status de Execução
-        self.status_badge = ctk.CTkLabel(
-            header_frame,
-            text="● PARADO",
-            font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
-            text_color="#FF5252",
-            fg_color="#261C1C",
-            corner_radius=8,
-            padx=16,
-            pady=8
+        # Botões de Navegação
+        self.btn_nav_dash = ctk.CTkButton(
+            self.sidebar_frame,
+            text="⚡  Dashboard",
+            height=40,
+            anchor="w",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            command=lambda: self._switch_tab("dashboard")
         )
-        self.status_badge.pack(side="right", padx=16, pady=12)
+        self.btn_nav_dash.grid(row=1, column=0, padx=16, pady=6, sticky="ew")
 
-    def _build_left_panel(self) -> None:
-        """Cria os cartões de configurações e calibração no painel esquerdo."""
-        left_container = ctk.CTkScrollableFrame(self, fg_color="transparent")
-        left_container.grid(row=1, column=0, padx=(16, 8), pady=8, sticky="nsew")
+        self.btn_nav_cerebro = ctk.CTkButton(
+            self.sidebar_frame,
+            text="🧠  Explorar Cérebro",
+            height=40,
+            anchor="w",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            command=lambda: self._switch_tab("cerebro")
+        )
+        self.btn_nav_cerebro.grid(row=2, column=0, padx=16, pady=6, sticky="ew")
 
-        # CARD 1: Configuração de IA
-        ai_card = ctk.CTkFrame(left_container, corner_radius=10, fg_color="#1E222B")
-        ai_card.pack(fill="x", pady=(0, 12))
+        self.btn_nav_config = ctk.CTkButton(
+            self.sidebar_frame,
+            text="⚙️  Configurações",
+            height=40,
+            anchor="w",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            command=lambda: self._switch_tab("config")
+        )
+        self.btn_nav_config.grid(row=3, column=0, padx=16, pady=6, sticky="ew")
+
+        # Área Inferior da Sidebar: Alternador de Tema Claro / Escuro
+        theme_box = ctk.CTkFrame(self.sidebar_frame, fg_color="transparent")
+        theme_box.grid(row=5, column=0, padx=16, pady=20, sticky="ew")
 
         ctk.CTkLabel(
-            ai_card,
-            text="🤖 Configuração de Inteligência Artificial",
-            font=ctk.CTkFont(family="Segoe UI", size=15, weight="bold"),
-            text_color="#E0E6ED"
-        ).pack(anchor="w", padx=14, pady=(12, 6))
+            theme_box,
+            text="Aparência Visual:",
+            font=ctk.CTkFont(size=12, weight="bold")
+        ).pack(anchor="w", pady=(0, 6))
 
-        # Provedor e Modelo
-        prov_row = ctk.CTkFrame(ai_card, fg_color="transparent")
-        prov_row.pack(fill="x", padx=14, pady=4)
-
-        ctk.CTkLabel(prov_row, text="Provedor:", width=70, anchor="w").pack(side="left")
-        self.provider_var = ctk.StringVar(value="Google Gemini")
-        self.provider_combo = ctk.CTkOptionMenu(
-            prov_row,
-            values=["Google Gemini", "OpenAI"],
-            variable=self.provider_var,
-            command=self._on_provider_change,
-            width=140
+        self.theme_switch = ctk.CTkSwitch(
+            theme_box,
+            text="Modo Escuro",
+            command=self._on_theme_toggle,
+            variable=self.current_theme,
+            onvalue="Dark",
+            offvalue="Light"
         )
-        self.provider_combo.pack(side="left", padx=(0, 10))
+        self.theme_switch.pack(anchor="w")
 
-        ctk.CTkLabel(prov_row, text="Modelo:", width=50, anchor="w").pack(side="left")
-        self.model_var = ctk.StringVar(value="gemini-2.5-flash")
-        self.model_combo = ctk.CTkComboBox(
-            prov_row,
-            values=["gemini-2.5-flash", "gemini-1.5-flash", "gemini-1.5-pro"],
-            variable=self.model_var
+    # =========================================================================
+    # ÁREA DE CONTEÚDO DINÂMICA
+    # =========================================================================
+    def _build_content_area(self) -> None:
+        """Cria os contêineres de cada uma das 3 abas principais."""
+        self.main_container = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
+        self.main_container.grid(row=0, column=1, sticky="nsew", padx=16, pady=16)
+        self.main_container.grid_rowconfigure(0, weight=1)
+        self.main_container.grid_columnconfigure(0, weight=1)
+
+        self._build_dashboard_tab()
+        self._build_cerebro_tab()
+        self._build_config_tab()
+
+    def _switch_tab(self, tab_id: str) -> None:
+        """Alterna a exibição para a aba desejada e ajusta as cores dos botões de navegação."""
+        self.tab_dashboard.grid_remove()
+        self.tab_cerebro.grid_remove()
+        self.tab_config.grid_remove()
+
+        # Reseta estilos dos botões
+        inactive_color = "transparent"
+        active_color = ("#E3F2FD", "#1E293B")
+        text_active = ("#1565C0", "#60A5FA")
+        text_inactive = ("#374151", "#94A3B8")
+
+        self.btn_nav_dash.configure(fg_color=inactive_color, text_color=text_inactive)
+        self.btn_nav_cerebro.configure(fg_color=inactive_color, text_color=text_inactive)
+        self.btn_nav_config.configure(fg_color=inactive_color, text_color=text_inactive)
+
+        if tab_id == "dashboard":
+            self.tab_dashboard.grid(row=0, column=0, sticky="nsew")
+            self.btn_nav_dash.configure(fg_color=active_color, text_color=text_active)
+        elif tab_id == "cerebro":
+            self.tab_cerebro.grid(row=0, column=0, sticky="nsew")
+            self.btn_nav_cerebro.configure(fg_color=active_color, text_color=text_active)
+            self._refresh_cerebro_gallery()
+        elif tab_id == "config":
+            self.tab_config.grid(row=0, column=0, sticky="nsew")
+            self.btn_nav_config.configure(fg_color=active_color, text_color=text_active)
+
+    # =========================================================================
+    # ABA 1: DASHBOARD & MONITOR AO VIVO DO CÉREBRO (SPLIT-SCREEN)
+    # =========================================================================
+    def _build_dashboard_tab(self) -> None:
+        """Constrói a visualização dividida: Controles de RPA à esquerda e Cérebro Ao Vivo à direita."""
+        self.tab_dashboard = ctk.CTkFrame(self.main_container, fg_color="transparent")
+        self.tab_dashboard.grid_columnconfigure(0, weight=4)  # Coluna de Controles (40%)
+        self.tab_dashboard.grid_columnconfigure(1, weight=6)  # Monitor do Cérebro (60%)
+        self.tab_dashboard.grid_rowconfigure(1, weight=1)
+
+        # Topo: Cabeçalho com Status Badge
+        top_bar = ctk.CTkFrame(self.tab_dashboard, corner_radius=10)
+        top_bar.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 12))
+
+        ctk.CTkLabel(
+            top_bar,
+            text="PAINEL DE AUTOMAÇÃO E MONITORAMENTO EM TEMPO REAL",
+            font=ctk.CTkFont(size=15, weight="bold")
+        ).pack(side="left", padx=16, pady=12)
+
+        self.status_badge = ctk.CTkLabel(
+            top_bar,
+            text="● PARADO",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color="#EF4444",
+            fg_color=("#FEE2E2", "#3B1E1E"),
+            corner_radius=8,
+            padx=14,
+            pady=6
         )
-        self.model_combo.pack(side="left", fill="x", expand=True)
+        self.status_badge.pack(side="right", padx=16, pady=10)
 
-        # API Key
-        key_label = ctk.CTkLabel(ai_card, text="Chave de API (Key):")
-        key_label.pack(anchor="w", padx=14, pady=(8, 2))
+        # LADO ESQUERDO: Controles de Calibração, Execução e Logs
+        left_col = ctk.CTkScrollableFrame(self.tab_dashboard, fg_color="transparent")
+        left_col.grid(row=1, column=0, sticky="nsew", padx=(0, 8))
 
-        key_row = ctk.CTkFrame(ai_card, fg_color="transparent")
-        key_row.pack(fill="x", padx=14, pady=(0, 10))
+        # Card de Controles de Execução
+        ctrl_card = ctk.CTkFrame(left_col, corner_radius=10)
+        ctrl_card.pack(fill="x", pady=(0, 10))
 
-        self.key_entry = ctk.CTkEntry(
-            key_row,
-            placeholder_text="Cole sua API Key aqui...",
-            show="*",
-            font=ctk.CTkFont(family="Consolas", size=12)
+        ctk.CTkLabel(
+            ctrl_card,
+            text="🎮 Controles da Automação",
+            font=ctk.CTkFont(size=14, weight="bold")
+        ).pack(anchor="w", padx=14, pady=(10, 6))
+
+        btn_row = ctk.CTkFrame(ctrl_card, fg_color="transparent")
+        btn_row.pack(fill="x", padx=14, pady=(0, 8))
+        btn_row.grid_columnconfigure((0, 1), weight=1)
+
+        self.btn_start = ctk.CTkButton(
+            btn_row,
+            text="▶ Iniciar (F8)",
+            command=self._cmd_start,
+            fg_color="#16A34A",
+            hover_color="#15803D",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            height=40
         )
-        self.key_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        self.btn_start.grid(row=0, column=0, padx=(0, 4), sticky="ew")
 
-        self.show_key_btn = ctk.CTkButton(
-            key_row,
-            text="👁",
-            width=36,
-            command=self._toggle_show_key,
-            fg_color="#2E3440",
-            hover_color="#3B4252"
+        self.btn_stop = ctk.CTkButton(
+            btn_row,
+            text="⏹ Parar (ESC)",
+            command=self._cmd_stop,
+            fg_color="#DC2626",
+            hover_color="#B91C1C",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            height=40
         )
-        self.show_key_btn.pack(side="left")
+        self.btn_stop.grid(row=0, column=1, padx=(4, 0), sticky="ew")
 
-        # Botão Salvar
-        self.save_btn = ctk.CTkButton(
-            ai_card,
-            text="Salvar Configurações de IA",
-            command=self._save_ai_config,
-            fg_color="#00897B",
-            hover_color="#00796B",
-            font=ctk.CTkFont(weight="bold")
-        )
-        self.save_btn.pack(fill="x", padx=14, pady=(0, 14))
-
-        # CARD 2: Calibração de Tela
-        calib_card = ctk.CTkFrame(left_container, corner_radius=10, fg_color="#1E222B")
-        calib_card.pack(fill="x", pady=(0, 12))
+        # Card de Calibração de Tela
+        calib_card = ctk.CTkFrame(left_col, corner_radius=10)
+        calib_card.pack(fill="x", pady=(0, 10))
 
         ctk.CTkLabel(
             calib_card,
-            text="📐 Calibração e Regiões da Tela",
-            font=ctk.CTkFont(family="Segoe UI", size=15, weight="bold"),
-            text_color="#E0E6ED"
-        ).pack(anchor="w", padx=14, pady=(12, 6))
+            text="📐 Calibração de Regiões",
+            font=ctk.CTkFont(size=14, weight="bold")
+        ).pack(anchor="w", padx=14, pady=(10, 6))
 
-        # Botão Área do Quiz
-        btn_area_row = ctk.CTkFrame(calib_card, fg_color="transparent")
-        btn_area_row.pack(fill="x", padx=14, pady=6)
-
-        self.btn_select_area = ctk.CTkButton(
-            btn_area_row,
+        btn_area = ctk.CTkButton(
+            calib_card,
             text="🔍 Selecionar Área do Quiz",
             command=self._start_area_selection,
-            fg_color="#1E88E5",
-            hover_color="#1565C0",
-            font=ctk.CTkFont(weight="bold")
+            fg_color="#2563EB",
+            hover_color="#1D4ED8"
         )
-        self.btn_select_area.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        btn_area.pack(fill="x", padx=14, pady=4)
 
         self.lbl_area_status = ctk.CTkLabel(
             calib_card,
             text="Área: Não definida",
-            font=ctk.CTkFont(family="Consolas", size=12),
-            text_color="#FFB74D"
+            font=ctk.CTkFont(size=11),
+            text_color="#F59E0B"
         )
-        self.lbl_area_status.pack(anchor="w", padx=16, pady=(0, 8))
+        self.lbl_area_status.pack(anchor="w", padx=16, pady=(0, 6))
 
-        # Botão Próxima Pergunta
-        btn_next_row = ctk.CTkFrame(calib_card, fg_color="transparent")
-        btn_next_row.pack(fill="x", padx=14, pady=6)
-
-        self.btn_select_next = ctk.CTkButton(
-            btn_next_row,
-            text="🎯 Definir Botão Próximo",
+        btn_next = ctk.CTkButton(
+            calib_card,
+            text="🎯 Mapear Botão Próximo",
             command=self._start_next_button_selection,
-            fg_color="#3949AB",
-            hover_color="#283593",
-            font=ctk.CTkFont(weight="bold")
+            fg_color="#4F46E5",
+            hover_color="#4338CA"
         )
-        self.btn_select_next.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        btn_next.pack(fill="x", padx=14, pady=4)
 
         self.lbl_next_status = ctk.CTkLabel(
             calib_card,
             text="Botão Próximo: Não definido",
-            font=ctk.CTkFont(family="Consolas", size=12),
-            text_color="#90A4AE"
+            font=ctk.CTkFont(size=11),
+            text_color="#64748B"
         )
-        self.lbl_next_status.pack(anchor="w", padx=16, pady=(0, 12))
+        self.lbl_next_status.pack(anchor="w", padx=16, pady=(0, 10))
 
-        # CARD 3: Configurações de Automação
-        auto_card = ctk.CTkFrame(left_container, corner_radius=10, fg_color="#1E222B")
-        auto_card.pack(fill="x")
+        # Temporização
+        time_card = ctk.CTkFrame(left_col, corner_radius=10)
+        time_card.pack(fill="x", pady=(0, 10))
 
-        ctk.CTkLabel(
-            auto_card,
-            text="⏱️ Parâmetros de Temporização",
-            font=ctk.CTkFont(family="Segoe UI", size=15, weight="bold"),
-            text_color="#E0E6ED"
-        ).pack(anchor="w", padx=14, pady=(12, 6))
+        delay_hdr = ctk.CTkFrame(time_card, fg_color="transparent")
+        delay_hdr.pack(fill="x", padx=14, pady=(8, 0))
 
-        # Delay pós-resposta
-        delay_header = ctk.CTkFrame(auto_card, fg_color="transparent")
-        delay_header.pack(fill="x", padx=14, pady=(4, 0))
-
-        ctk.CTkLabel(delay_header, text="Espera antes de avançar:").pack(side="left")
-        self.lbl_delay_val = ctk.CTkLabel(delay_header, text="2.5 s", font=ctk.CTkFont(weight="bold"))
+        ctk.CTkLabel(delay_hdr, text="Espera antes de avançar:").pack(side="left")
+        self.lbl_delay_val = ctk.CTkLabel(delay_hdr, text="2.5s", font=ctk.CTkFont(weight="bold"))
         self.lbl_delay_val.pack(side="right")
 
         self.slider_delay = ctk.CTkSlider(
-            auto_card,
+            time_card,
             from_=0.5,
-            to=10.0,
-            number_of_steps=95,
-            command=self._on_delay_slider_change
+            to=8.0,
+            number_of_steps=75,
+            command=self._on_delay_change
         )
-        self.slider_delay.pack(fill="x", padx=14, pady=(0, 10))
+        self.slider_delay.pack(fill="x", padx=14, pady=(2, 12))
 
-        # Opções Adicionais
-        self.check_auto_advance = ctk.CTkCheckBox(
-            auto_card,
-            text="Avançar automaticamente para a próxima questão",
-            command=self._save_checkboxes
-        )
-        self.check_auto_advance.pack(anchor="w", padx=14, pady=4)
-
-        self.check_smooth_mouse = ctk.CTkCheckBox(
-            auto_card,
-            text="Movimento suave e humanizado do mouse",
-            command=self._save_checkboxes
-        )
-        self.check_smooth_mouse.pack(anchor="w", padx=14, pady=(4, 14))
-
-    def _build_right_panel(self) -> None:
-        """Cria o painel de controles principais e console de logs à direita."""
-        right_container = ctk.CTkFrame(self, fg_color="transparent")
-        right_container.grid(row=1, column=1, padx=(8, 16), pady=8, sticky="nsew")
-        right_container.grid_rowconfigure(1, weight=1)
-        right_container.grid_columnconfigure(0, weight=1)
-
-        # CARD CONTROLES
-        ctrl_card = ctk.CTkFrame(right_container, corner_radius=10, fg_color="#1E222B")
-        ctrl_card.grid(row=0, column=0, fill="x", pady=(0, 12))
+        # Console de Logs Compacto
+        log_card = ctk.CTkFrame(left_col, corner_radius=10)
+        log_card.pack(fill="both", expand=True)
 
         ctk.CTkLabel(
-            ctrl_card,
-            text="🎮 Painel de Controle de Execução",
-            font=ctk.CTkFont(family="Segoe UI", size=15, weight="bold"),
-            text_color="#E0E6ED"
-        ).pack(anchor="w", padx=14, pady=(12, 8))
-
-        btn_grid = ctk.CTkFrame(ctrl_card, fg_color="transparent")
-        btn_grid.pack(fill="x", padx=14, pady=(0, 8))
-        btn_grid.grid_columnconfigure((0, 1, 2), weight=1)
-
-        self.btn_start = ctk.CTkButton(
-            btn_grid,
-            text="▶ Iniciar (F8)",
-            command=self._cmd_start,
-            fg_color="#2E7D32",
-            hover_color="#1B5E20",
-            height=42,
-            font=ctk.CTkFont(weight="bold", size=14)
-        )
-        self.btn_start.grid(row=0, column=0, padx=(0, 6), sticky="ew")
-
-        self.btn_pause = ctk.CTkButton(
-            btn_grid,
-            text="⏸ Pausar (F8)",
-            command=self._cmd_pause,
-            fg_color="#F57F17",
-            hover_color="#E65100",
-            height=42,
-            font=ctk.CTkFont(weight="bold", size=14)
-        )
-        self.btn_pause.grid(row=0, column=1, padx=6, sticky="ew")
-
-        self.btn_stop = ctk.CTkButton(
-            btn_grid,
-            text="⏹ Parar (ESC)",
-            command=self._cmd_stop,
-            fg_color="#C62828",
-            hover_color="#8E0000",
-            height=42,
-            font=ctk.CTkFont(weight="bold", size=14)
-        )
-        self.btn_stop.grid(row=0, column=2, padx=(6, 0), sticky="ew")
-
-        hint_label = ctk.CTkLabel(
-            ctrl_card,
-            text="💡 Dica: Use [F8] no teclado para Iniciar/Pausar e [ESC] como emergência.",
-            font=ctk.CTkFont(size=11),
-            text_color="#90A4AE"
-        )
-        hint_label.pack(anchor="w", padx=14, pady=(0, 10))
-
-        # CARD LOGS E STATUS
-        log_card = ctk.CTkFrame(right_container, corner_radius=10, fg_color="#1E222B")
-        log_card.grid(row=1, column=0, fill="both", sticky="nsew")
-        log_card.grid_rowconfigure(1, weight=1)
-        log_card.grid_columnconfigure(0, weight=1)
-
-        log_header = ctk.CTkFrame(log_card, fg_color="transparent")
-        log_header.grid(row=0, column=0, fill="x", padx=14, pady=(10, 4))
-
-        ctk.CTkLabel(
-            log_header,
-            text="📜 Log de Execução em Tempo Real",
-            font=ctk.CTkFont(family="Segoe UI", size=15, weight="bold"),
-            text_color="#E0E6ED"
-        ).pack(side="left")
-
-        btn_clear_log = ctk.CTkButton(
-            log_header,
-            text="Limpar",
-            width=70,
-            height=26,
-            command=self._clear_logs,
-            fg_color="#2E3440",
-            hover_color="#3B4252"
-        )
-        btn_clear_log.pack(side="right")
+            log_card,
+            text="📜 Log de Passos",
+            font=ctk.CTkFont(size=13, weight="bold")
+        ).pack(anchor="w", padx=14, pady=(8, 4))
 
         self.log_textbox = ctk.CTkTextbox(
             log_card,
-            font=ctk.CTkFont(family="Consolas", size=12),
-            fg_color="#12151B",
-            text_color="#D8DEE9",
+            height=140,
+            font=ctk.CTkFont(family="Consolas", size=11),
             wrap="word",
             corner_radius=8
         )
-        self.log_textbox.grid(row=1, column=0, padx=14, pady=(0, 12), sticky="nsew")
+        self.log_textbox.pack(fill="both", expand=True, padx=12, pady=(0, 10))
 
-    def _setup_hotkeys(self) -> None:
-        """Registra hotkeys globais no sistema operacional e atalhos na janela."""
-        self.bind("<F8>", lambda e: self.engine.toggle_play_pause())
-        self.bind("<Escape>", lambda e: self.engine.stop())
+        # LADO DIREITO: CÉREBRO EM TEMPO REAL (LIVE MONITOR)
+        right_col = ctk.CTkFrame(self.tab_dashboard, corner_radius=12)
+        right_col.grid(row=1, column=1, sticky="nsew", padx=(8, 0))
+        right_col.grid_rowconfigure(2, weight=1)
+        right_col.grid_columnconfigure(0, weight=1)
 
-        # Tenta registrar atalhos globais via biblioteca keyboard
-        try:
-            import keyboard
-            keyboard.add_hotkey("f8", lambda: self.after(0, self.engine.toggle_play_pause))
-            keyboard.add_hotkey("esc", lambda: self.after(0, self.engine.stop))
-        except Exception as e:
-            self.enqueue_log(f"Aviso de Atalhos Globais: {e}. Atalhos disponíveis quando a janela estiver focada.", "WARNING")
+        # Header do Cérebro em Tempo Real
+        live_header = ctk.CTkFrame(right_col, fg_color="transparent")
+        live_header.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 4))
 
-    def _load_saved_ui_state(self) -> None:
-        """Restaura todos os valores gravados no config.json para os campos visuais."""
-        cfg = self.config_manager.config_data
+        ctk.CTkLabel(
+            live_header,
+            text="🧠 Monitor do Cérebro em Tempo Real",
+            font=ctk.CTkFont(size=16, weight="bold"),
+            text_color="#0284C7"
+        ).pack(side="left")
 
-        # Provedor e modelo
-        prov = "Google Gemini" if cfg.get("api_provider") == "gemini" else "OpenAI"
-        self.provider_var.set(prov)
-        self._on_provider_change(prov)
-        self.model_var.set(cfg.get("model_name", "gemini-2.5-flash"))
+        self.lbl_total_cerebro = ctk.CTkLabel(
+            live_header,
+            text="Total na Memória: 0",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#64748B"
+        )
+        self.lbl_total_cerebro.pack(side="right")
 
-        # API Key
-        key = cfg.get("api_key", "")
-        if key:
-            self.key_entry.insert(0, key)
+        # Badge de Classificação em Destaque
+        badge_row = ctk.CTkFrame(right_col, fg_color="transparent")
+        badge_row.grid(row=1, column=0, sticky="ew", padx=16, pady=4)
 
-        # Região do Quiz
-        region = cfg.get("quiz_region", {})
-        if region.get("configured", False):
-            self.lbl_area_status.configure(
-                text=f"Área: X={region['x']} Y={region['y']} ({region['width']}x{region['height']} px)",
-                text_color="#00E676"
+        ctk.CTkLabel(badge_row, text="Elemento Visual Detectado:", font=ctk.CTkFont(size=12)).pack(side="left")
+
+        self.badge_categoria = ctk.CTkLabel(
+            badge_row,
+            text="[ AGUARDANDO ESCANEAMENTO ]",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color="#059669",
+            fg_color=("#D1FAE5", "#064E3B"),
+            corner_radius=8,
+            padx=12,
+            pady=4
+        )
+        self.badge_categoria.pack(side="left", padx=10)
+
+        # Container Principal de Exibição Ao Vivo
+        live_body = ctk.CTkScrollableFrame(right_col, fg_color="transparent")
+        live_body.grid(row=2, column=0, sticky="nsew", padx=16, pady=(4, 14))
+
+        # Imagem Recortada em Tempo Real
+        self.live_img_container = ctk.CTkFrame(
+            live_body,
+            height=240,
+            fg_color=("#F1F5F9", "#1E293B"),
+            corner_radius=10
+        )
+        self.live_img_container.pack(fill="x", pady=(0, 10))
+
+        self.lbl_live_image = ctk.CTkLabel(
+            self.live_img_container,
+            text="🖼️ O recorte do elemento visual analisado pela IA aparecerá aqui em tempo real.",
+            font=ctk.CTkFont(size=12)
+        )
+        self.lbl_live_image.pack(expand=True, fill="both", padx=12, pady=12)
+
+        # Contexto Explicativo da Imagem
+        ctk.CTkLabel(
+            live_body,
+            text="💡 Contexto Educacional da Imagem:",
+            font=ctk.CTkFont(size=13, weight="bold")
+        ).pack(anchor="w", pady=(4, 2))
+
+        self.txt_live_contexto = ctk.CTkTextbox(
+            live_body,
+            height=65,
+            font=ctk.CTkFont(size=12),
+            wrap="word",
+            corner_radius=8
+        )
+        self.txt_live_contexto.pack(fill="x", pady=(0, 10))
+        self.txt_live_contexto.insert("1.0", "A IA descreverá automaticamente gráficos, fórmulas ou figuras aqui...")
+
+        # Enunciado Identificado
+        ctk.CTkLabel(
+            live_body,
+            text="📝 Enunciado Identificado:",
+            font=ctk.CTkFont(size=13, weight="bold")
+        ).pack(anchor="w", pady=(4, 2))
+
+        self.txt_live_pergunta = ctk.CTkTextbox(
+            live_body,
+            height=65,
+            font=ctk.CTkFont(size=12),
+            wrap="word",
+            corner_radius=8
+        )
+        self.txt_live_pergunta.pack(fill="x", pady=(0, 10))
+        self.txt_live_pergunta.insert("1.0", "A pergunta extraída aparecerá aqui...")
+
+        # Alternativa Clicada
+        ans_card = ctk.CTkFrame(live_body, fg_color=("#ECFDF5", "#064E3B"), corner_radius=8)
+        ans_card.pack(fill="x", pady=(4, 0))
+
+        ctk.CTkLabel(
+            ans_card,
+            text="✅ Alternativa Clicada:",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#047857"
+        ).pack(side="left", padx=12, pady=10)
+
+        self.lbl_live_resposta = ctk.CTkLabel(
+            ans_card,
+            text="Nenhuma resposta selecionada ainda.",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color="#065F46"
+        )
+        self.lbl_live_resposta.pack(side="left", padx=6, pady=10)
+
+    # =========================================================================
+    # ABA 2: EXPLORAR CÉREBRO (GALERIA INTERATIVA & BUSCA)
+    # =========================================================================
+    def _build_cerebro_tab(self) -> None:
+        """Constrói a galeria interativa com barra de busca, filtros rápidos e grade rolável."""
+        self.tab_cerebro = ctk.CTkFrame(self.main_container, fg_color="transparent")
+        self.tab_cerebro.grid_rowconfigure(2, weight=1)
+        self.tab_cerebro.grid_columnconfigure(0, weight=1)
+
+        # Topo: Barra de Busca
+        search_card = ctk.CTkFrame(self.tab_cerebro, corner_radius=10)
+        search_card.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+
+        ctk.CTkLabel(
+            search_card,
+            text="🔎 Buscar no Cérebro:",
+            font=ctk.CTkFont(size=13, weight="bold")
+        ).pack(side="left", padx=14, pady=10)
+
+        self.entry_search = ctk.CTkEntry(
+            search_card,
+            placeholder_text="Digite 'Gráfico', 'Equação' ou palavra-chave da matéria...",
+            textvariable=self.search_query_var,
+            font=ctk.CTkFont(size=13)
+        )
+        self.entry_search.pack(side="left", fill="x", expand=True, padx=8, pady=10)
+        self.entry_search.bind("<KeyRelease>", lambda e: self._refresh_cerebro_gallery())
+
+        btn_search = ctk.CTkButton(
+            search_card,
+            text="Pesquisar",
+            width=100,
+            command=self._refresh_cerebro_gallery
+        )
+        btn_search.pack(side="left", padx=(0, 14), pady=10)
+
+        # Filtros Rápidos por Categoria
+        filters_bar = ctk.CTkFrame(self.tab_cerebro, fg_color="transparent")
+        filters_bar.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+
+        self.filter_buttons: List[ctk.CTkButton] = []
+        categorias_filtro = ["Todos", "Gráfico", "Tabela", "Diagrama", "Fórmula", "Texto Puro"]
+
+        for cat in categorias_filtro:
+            btn_f = ctk.CTkButton(
+                filters_bar,
+                text=cat,
+                height=32,
+                corner_radius=16,
+                font=ctk.CTkFont(size=12, weight="bold"),
+                fg_color=("#2563EB", "#1D4ED8") if cat == "Todos" else ("#E2E8F0", "#334155"),
+                text_color="#FFFFFF" if cat == "Todos" else ("#1E293B", "#F8FAFC"),
+                command=lambda c=cat: self._set_category_filter(c)
             )
+            btn_f.pack(side="left", padx=4)
+            self.filter_buttons.append(btn_f)
 
-        # Botão Próximo
-        nxt = cfg.get("next_button", {})
-        if nxt.get("configured", False):
-            self.lbl_next_status.configure(
-                text=f"Botão Próximo: X={nxt['x']} Y={nxt['y']}",
-                text_color="#00E676"
-            )
+        # Grade Rolável de Cards do Cérebro
+        self.gallery_scroll = ctk.CTkScrollableFrame(self.tab_cerebro, corner_radius=12)
+        self.gallery_scroll.grid(row=2, column=0, sticky="nsew")
+        self.gallery_scroll.grid_columnconfigure((0, 1), weight=1)
 
-        # Slider de Delay
-        delay = float(cfg.get("action_delay", 2.5))
-        self.slider_delay.set(delay)
-        self.lbl_delay_val.configure(text=f"{delay:.1f} s")
+    def _set_category_filter(self, category: str) -> None:
+        """Aplica filtro rápido de categoria e redesenha a galeria."""
+        self.selected_category_filter = category
+        for btn in self.filter_buttons:
+            if btn.cget("text") == category:
+                btn.configure(fg_color=("#2563EB", "#1D4ED8"), text_color="#FFFFFF")
+            else:
+                btn.configure(fg_color=("#E2E8F0", "#334155"), text_color=("#1E293B", "#F8FAFC"))
+        self._refresh_cerebro_gallery()
 
-        # Checkboxes
-        if cfg.get("auto_advance", True):
-            self.check_auto_advance.select()
-        else:
-            self.check_auto_advance.deselect()
+    def _refresh_cerebro_gallery(self) -> None:
+        """Recarrega os cards na aba 'Explorar Cérebro'."""
+        for widget in self.gallery_scroll.winfo_children():
+            widget.destroy()
 
-        if cfg.get("smooth_mouse", True):
-            self.check_smooth_mouse.select()
-        else:
-            self.check_smooth_mouse.deselect()
+        query = self.search_query_var.get()
+        itens = self.cerebro_manager.search_items(
+            query=query,
+            categoria_filter=self.selected_category_filter
+        )
+
+        if not itens:
+            empty_box = ctk.CTkFrame(self.gallery_scroll, fg_color="transparent")
+            empty_box.grid(row=0, column=0, columnspan=2, pady=40)
+            ctk.CTkLabel(
+                empty_box,
+                text="🧠 Nenhum item encontrado no Cérebro para este filtro.",
+                font=ctk.CTkFont(size=14, weight="bold"),
+                text_color="#94A3B8"
+            ).pack()
+            return
+
+        for idx, item in enumerate(itens):
+            row_idx = idx // 2
+            col_idx = idx % 2
+            self._render_cerebro_card(self.gallery_scroll, item, row_idx, col_idx)
+
+    def _render_cerebro_card(self, parent: ctk.CTkScrollableFrame, item: CerebroItem, row: int, col: int) -> None:
+        """Renderiza um card individual do Cérebro com miniatura, badge e resumo."""
+        card = ctk.CTkFrame(parent, corner_radius=10)
+        card.grid(row=row, column=col, padx=8, pady=8, sticky="nsew")
+
+        # Cabeçalho do Card: Badge + Data
+        hdr = ctk.CTkFrame(card, fg_color="transparent")
+        hdr.pack(fill="x", padx=10, pady=(8, 4))
+
+        badge = ctk.CTkLabel(
+            hdr,
+            text=f" {item.categoria.upper()} ",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color=("#DBEAFE", "#1E3A8A"),
+            text_color="#1D4ED8",
+            corner_radius=6
+        )
+        badge.pack(side="left")
+
+        ctk.CTkLabel(
+            hdr,
+            text=item.data_hora.split(" ")[1] if " " in item.data_hora else item.data_hora,
+            font=ctk.CTkFont(size=11),
+            text_color="#94A3B8"
+        ).pack(side="right")
+
+        # Thumbnail da Imagem (se houver)
+        if item.caminho_thumbnail and os.path.exists(item.caminho_thumbnail):
+            try:
+                if item.caminho_thumbnail not in self.cached_images:
+                    pil_img = Image.open(item.caminho_thumbnail)
+                    self.cached_images[item.caminho_thumbnail] = ctk.CTkImage(
+                        light_image=pil_img,
+                        dark_image=pil_img,
+                        size=(240, 150)
+                    )
+                ctk_img = self.cached_images[item.caminho_thumbnail]
+                img_lbl = ctk.CTkLabel(card, image=ctk_img, text="")
+                img_lbl.pack(pady=4)
+            except Exception:
+                pass
+
+        # Texto da Pergunta
+        pergunta_preview = item.pergunta[:90] + ("..." if len(item.pergunta) > 90 else "")
+        ctk.CTkLabel(
+            card,
+            text=pergunta_preview,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            anchor="w",
+            justify="left",
+            wraplength=340
+        ).pack(fill="x", padx=10, pady=2)
+
+        # Resposta Correta
+        ans_box = ctk.CTkFrame(card, fg_color=("#F0FDF4", "#064E3B"), corner_radius=6)
+        ans_box.pack(fill="x", padx=10, pady=(4, 8))
+
+        ctk.CTkLabel(
+            ans_box,
+            text=f"✔ {item.resposta_correta}",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#047857",
+            anchor="w",
+            justify="left",
+            wraplength=330
+        ).pack(fill="x", padx=8, pady=4)
+
+        # Botão para Expandir Detalhes
+        btn_details = ctk.CTkButton(
+            card,
+            text="Ver Detalhes do Estudo",
+            height=28,
+            fg_color=("#E2E8F0", "#334155"),
+            text_color=("#1E293B", "#F8FAFC"),
+            hover_color=("#CBD5E1", "#475569"),
+            command=lambda i=item: self._show_card_details_modal(i)
+        )
+        btn_details.pack(fill="x", padx=10, pady=(0, 10))
+
+    def _show_card_details_modal(self, item: CerebroItem) -> None:
+        """Abre uma janela modal detalhada com a imagem ampliada e contexto completo."""
+        modal = ctk.CTkToplevel(self)
+        modal.title(f"Cérebro - Detalhes da Questão #{item.id}")
+        modal.geometry("700x720")
+        modal.minsize(580, 600)
+        modal.attributes("-topmost", True)
+
+        scroll = ctk.CTkScrollableFrame(modal)
+        scroll.pack(fill="both", expand=True, padx=16, pady=16)
+
+        # Categoria Badge
+        ctk.CTkLabel(
+            scroll,
+            text=f"[ {item.categoria.upper()} ] - {item.data_hora}",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color="#2563EB"
+        ).pack(anchor="w", pady=(0, 10))
+
+        # Imagem em tamanho maior
+        if item.caminho_imagem and os.path.exists(item.caminho_imagem):
+            try:
+                orig_img = Image.open(item.caminho_imagem)
+                w, h = orig_img.size
+                ratio = min(620 / max(1, w), 340 / max(1, h))
+                disp_w = max(50, int(w * ratio))
+                disp_h = max(50, int(h * ratio))
+
+                expanded_ctk_img = ctk.CTkImage(
+                    light_image=orig_img,
+                    dark_image=orig_img,
+                    size=(disp_w, disp_h)
+                )
+                img_lbl = ctk.CTkLabel(scroll, image=expanded_ctk_img, text="")
+                img_lbl.pack(pady=10)
+            except Exception as e:
+                ctk.CTkLabel(scroll, text=f"Erro ao carregar imagem: {e}").pack()
+
+        # Contexto Educacional
+        ctk.CTkLabel(scroll, text="💡 Contexto da Imagem / Figura:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", pady=(6, 2))
+        ctx_box = ctk.CTkTextbox(scroll, height=80, wrap="word")
+        ctx_box.pack(fill="x", pady=(0, 10))
+        ctx_box.insert("1.0", item.contexto_explicativo or "Sem contexto específico registrado.")
+        ctx_box.configure(state="disabled")
+
+        # Pergunta Completa
+        ctk.CTkLabel(scroll, text="📝 Enunciado Completo:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", pady=(6, 2))
+        q_box = ctk.CTkTextbox(scroll, height=90, wrap="word")
+        q_box.pack(fill="x", pady=(0, 10))
+        q_box.insert("1.0", item.pergunta)
+        q_box.configure(state="disabled")
+
+        # Alternativa
+        ctk.CTkLabel(scroll, text="✅ Alternativa Correta:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", pady=(6, 2))
+        ans_lbl = ctk.CTkLabel(
+            scroll,
+            text=item.resposta_correta,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color="#059669",
+            fg_color=("#D1FAE5", "#064E3B"),
+            corner_radius=8,
+            padx=12,
+            pady=8
+        )
+        ans_lbl.pack(fill="x", pady=(0, 14))
+
+        ctk.CTkButton(scroll, text="Fechar", command=modal.destroy).pack(pady=10)
+
+    # =========================================================================
+    # ABA 3: CONFIGURAÇÕES
+    # =========================================================================
+    def _build_config_tab(self) -> None:
+        """Constrói o painel de configurações de credenciais, provedor e limpeza da base."""
+        self.tab_config = ctk.CTkScrollableFrame(self.main_container, corner_radius=10)
+
+        ctk.CTkLabel(
+            self.tab_config,
+            text="Configurações do Sistema",
+            font=ctk.CTkFont(size=18, weight="bold")
+        ).pack(anchor="w", padx=16, pady=(16, 12))
+
+        # Provedor e Chave de API
+        ai_card = ctk.CTkFrame(self.tab_config, corner_radius=10)
+        ai_card.pack(fill="x", padx=16, pady=(0, 12))
+
+        ctk.CTkLabel(
+            ai_card,
+            text="Provedor de Inteligência Artificial",
+            font=ctk.CTkFont(size=14, weight="bold")
+        ).pack(anchor="w", padx=14, pady=(12, 6))
+
+        p_row = ctk.CTkFrame(ai_card, fg_color="transparent")
+        p_row.pack(fill="x", padx=14, pady=4)
+
+        ctk.CTkLabel(p_row, text="Provedor:").pack(side="left")
+        self.cfg_prov_var = ctk.StringVar(value="Google Gemini")
+        self.combo_prov = ctk.CTkOptionMenu(
+            p_row,
+            values=["Google Gemini", "OpenAI"],
+            variable=self.cfg_prov_var,
+            command=self._on_provider_change
+        )
+        self.combo_prov.pack(side="left", padx=10)
+
+        ctk.CTkLabel(p_row, text="Modelo:").pack(side="left")
+        self.cfg_model_var = ctk.StringVar(value="gemini-2.5-flash")
+        self.combo_model = ctk.CTkComboBox(
+            p_row,
+            values=["gemini-2.5-flash", "gemini-1.5-flash", "gemini-1.5-pro"],
+            variable=self.cfg_model_var
+        )
+        self.combo_model.pack(side="left", fill="x", expand=True)
+
+        ctk.CTkLabel(ai_card, text="Chave de API:").pack(anchor="w", padx=14, pady=(8, 2))
+
+        key_row = ctk.CTkFrame(ai_card, fg_color="transparent")
+        key_row.pack(fill="x", padx=14, pady=(0, 12))
+
+        self.entry_key = ctk.CTkEntry(key_row, placeholder_text="Cole sua chave de API aqui...", show="*")
+        self.entry_key.pack(side="left", fill="x", expand=True, padx=(0, 6))
+
+        self.btn_eye = ctk.CTkButton(key_row, text="👁", width=36, command=self._toggle_eye)
+        self.btn_eye.pack(side="left")
+
+        btn_save_ai = ctk.CTkButton(
+            ai_card,
+            text="Salvar Credenciais de IA",
+            command=self._save_ai_settings,
+            fg_color="#0D9488",
+            hover_color="#0F766E"
+        )
+        btn_save_ai.pack(fill="x", padx=14, pady=(0, 14))
+
+        # Manutenção da Base do Cérebro
+        maint_card = ctk.CTkFrame(self.tab_config, corner_radius=10)
+        maint_card.pack(fill="x", padx=16, pady=(0, 12))
+
+        ctk.CTkLabel(
+            maint_card,
+            text="Manutenção do Cérebro Local",
+            font=ctk.CTkFont(size=14, weight="bold")
+        ).pack(anchor="w", padx=14, pady=(12, 6))
+
+        ctk.CTkLabel(
+            maint_card,
+            text="Localização dos Dados: ./Cerebro_Dados/ (JSON e Pastas de Imagens Categorizadas)",
+            font=ctk.CTkFont(size=12),
+            text_color="#64748B"
+        ).pack(anchor="w", padx=14, pady=2)
+
+        btn_clear = ctk.CTkButton(
+            maint_card,
+            text="🗑️ Limpar Base do Cérebro e Recortes de Imagem",
+            command=self._clear_cerebro_database,
+            fg_color="#DC2626",
+            hover_color="#B91C1C"
+        )
+        btn_clear.pack(fill="x", padx=14, pady=(8, 14))
+
+    # =========================================================================
+    # ATUALIZAÇÃO DO MONITOR DO CÉREBRO EM TEMPO REAL (LIVE CALLBACK)
+    # =========================================================================
+    def update_live_cerebro_card(self, item: CerebroItem) -> None:
+        """Chamado instantaneamente pela worker thread quando uma nova questão é resolvida."""
+        def apply():
+            # Atualiza badge de categoria
+            self.badge_categoria.configure(text=f"[ {item.categoria.upper()} ]")
+
+            # Atualiza contador no topo
+            total = len(self.cerebro_manager.itens)
+            self.lbl_total_cerebro.configure(text=f"Total na Memória: {total}")
+
+            # Atualiza textos de pergunta, resposta e contexto
+            self.txt_live_contexto.delete("1.0", "end")
+            self.txt_live_contexto.insert("1.0", item.contexto_explicativo or "Sem descrição visual necessária.")
+
+            self.txt_live_pergunta.delete("1.0", "end")
+            self.txt_live_pergunta.insert("1.0", item.pergunta)
+
+            self.lbl_live_resposta.configure(text=item.resposta_correta)
+
+            # Atualiza a imagem renderizada na hora
+            img_path = item.caminho_thumbnail or item.caminho_imagem
+            if img_path and os.path.exists(img_path):
+                try:
+                    pil_img = Image.open(img_path)
+                    ctk_img = ctk.CTkImage(
+                        light_image=pil_img,
+                        dark_image=pil_img,
+                        size=(300, 180)
+                    )
+                    self.lbl_live_image.configure(image=ctk_img, text="")
+                except Exception:
+                    pass
+
+        self.after(0, apply)
+
+    # =========================================================================
+    # MÉTODOS DE CONTROLE, THEME TOGGLE E SUPORTE
+    # =========================================================================
+    def _on_theme_toggle(self) -> None:
+        """Alterna instantaneamente entre Modo Claro (Clean White) e Modo Escuro."""
+        mode = self.current_theme.get()
+        ctk.set_appearance_mode(mode)
+        self.config_manager.set("theme_mode", mode)
+        self.enqueue_log(f"Tema alterado para: {mode.upper()}", "INFO")
 
     def _on_provider_change(self, choice: str) -> None:
-        """Atualiza a lista de modelos recomendados de acordo com o provedor escolhido."""
         if choice == "Google Gemini":
             models = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
-            self.model_combo.configure(values=models)
-            if self.model_var.get() not in models:
-                self.model_var.set("gemini-2.5-flash")
+            self.combo_model.configure(values=models)
+            self.cfg_model_var.set("gemini-2.5-flash")
         else:
             models = ["gpt-4o-mini", "gpt-4o"]
-            self.model_combo.configure(values=models)
-            if self.model_var.get() not in models:
-                self.model_var.set("gpt-4o-mini")
+            self.combo_model.configure(values=models)
+            self.cfg_model_var.set("gpt-4o-mini")
 
-    def _toggle_show_key(self) -> None:
-        """Alterna a exibição oculta/visível da Chave de API."""
-        if self.key_entry.cget("show") == "*":
-            self.key_entry.configure(show="")
-            self.show_key_btn.configure(text="🔒")
+    def _toggle_eye(self) -> None:
+        if self.entry_key.cget("show") == "*":
+            self.entry_key.configure(show="")
+            self.btn_eye.configure(text="🔒")
         else:
-            self.key_entry.configure(show="*")
-            self.show_key_btn.configure(text="👁")
+            self.entry_key.configure(show="*")
+            self.btn_eye.configure(text="👁")
 
-    def _save_ai_config(self) -> None:
-        """Salva a chave de API, provedor e modelo selecionados no disco."""
-        prov_key = "gemini" if self.provider_var.get() == "Google Gemini" else "openai"
-        key_val = self.key_entry.get().strip()
-        model_val = self.model_var.get().strip()
+    def _save_ai_settings(self) -> None:
+        prov = "gemini" if self.cfg_prov_var.get() == "Google Gemini" else "openai"
+        key = self.entry_key.get().strip()
+        model = self.cfg_model_var.get().strip()
 
-        self.config_manager.set("api_provider", prov_key, auto_save=False)
-        self.config_manager.set("api_key", key_val, auto_save=False)
-        self.config_manager.set("model_name", model_val, auto_save=True)
+        self.config_manager.set("api_provider", prov, auto_save=False)
+        self.config_manager.set("api_key", key, auto_save=False)
+        self.config_manager.set("model_name", model, auto_save=True)
 
-        self.ai_service.update_credentials(prov_key, key_val, model_val)
-        self.enqueue_log("Configurações de Inteligência Artificial salvas com sucesso.", "SUCCESS")
+        self.ai_service.update_credentials(prov, key, model)
+        self.enqueue_log("Configurações de IA salvas com sucesso.", "SUCCESS")
 
-    def _on_delay_slider_change(self, val: float) -> None:
-        """Atualiza o label e o arquivo de configuração ao mover o slider."""
+    def _on_delay_change(self, val: float) -> None:
         rounded = round(val, 1)
-        self.lbl_delay_val.configure(text=f"{rounded:.1f} s")
+        self.lbl_delay_val.configure(text=f"{rounded:.1f}s")
         self.config_manager.set("action_delay", rounded)
 
-    def _save_checkboxes(self) -> None:
-        """Salva o estado das caixas de seleção."""
-        self.config_manager.set("auto_advance", bool(self.check_auto_advance.get()), auto_save=False)
-        self.config_manager.set("smooth_mouse", bool(self.check_smooth_mouse.get()), auto_save=True)
+    def _clear_cerebro_database(self) -> None:
+        self.cerebro_manager.clear_cerebro()
+        self.lbl_total_cerebro.configure(text="Total na Memória: 0")
+        self._refresh_cerebro_gallery()
+        self.enqueue_log("Base do Cérebro e recortes foram limpos.", "WARNING")
 
     def _start_area_selection(self) -> None:
-        """Oculta temporariamente a janela e abre a sobreposição de seleção de área."""
         self.withdraw()
         self.after(250, lambda: ScreenAreaSelector(self, self._on_area_selected))
 
     def _on_area_selected(self, x: int, y: int, w: int, h: int) -> None:
-        """Recebe as coordenadas da área selecionada e atualiza a interface."""
         self.deiconify()
         self.config_manager.update_quiz_region(x, y, w, h)
         self.lbl_area_status.configure(
             text=f"Área: X={x} Y={y} ({w}x{h} px)",
-            text_color="#00E676"
+            text_color="#10B981"
         )
-        self.enqueue_log(f"Área do quiz definida com sucesso: [{x}, {y}, {w}, {h}].", "SUCCESS")
+        self.enqueue_log(f"Área calibrada: [{x}, {y}, {w}, {h}].", "SUCCESS")
 
     def _start_next_button_selection(self) -> None:
-        """Oculta temporariamente a janela e abre a captura do botão próximo."""
         self.withdraw()
-        self.after(250, lambda: PointSelector(self, self._on_next_button_selected, "Clique no Botão Próximo"))
+        self.after(250, lambda: PointSelector(self, self._on_next_selected, "Clique no Botão Próximo"))
 
-    def _on_next_button_selected(self, x: int, y: int) -> None:
-        """Recebe as coordenadas do botão próximo e atualiza a interface."""
+    def _on_next_selected(self, x: int, y: int) -> None:
         self.deiconify()
         self.config_manager.update_next_button(x, y)
         self.lbl_next_status.configure(
             text=f"Botão Próximo: X={x} Y={y}",
-            text_color="#00E676"
+            text_color="#10B981"
         )
-        self.enqueue_log(f"Botão Próximo calibrado na coordenada: ({x}, {y}).", "SUCCESS")
+        self.enqueue_log(f"Botão Próximo mapeado: ({x}, {y}).", "SUCCESS")
 
     def _cmd_start(self) -> None:
         self.engine.start()
 
-    def _cmd_pause(self) -> None:
-        self.engine.pause()
-
     def _cmd_stop(self) -> None:
         self.engine.stop()
 
+    def _setup_hotkeys(self) -> None:
+        self.bind("<F8>", lambda e: self.engine.toggle_play_pause())
+        self.bind("<Escape>", lambda e: self.engine.stop())
+
+        try:
+            import keyboard
+            keyboard.add_hotkey("f8", lambda: self.after(0, self.engine.toggle_play_pause))
+            keyboard.add_hotkey("esc", lambda: self.after(0, self.engine.stop))
+        except Exception:
+            pass
+
+    def _load_saved_settings(self) -> None:
+        cfg = self.config_manager.config_data
+
+        # Tema salvo (padrão Light)
+        saved_theme = cfg.get("theme_mode", "Light")
+        self.current_theme.set(saved_theme)
+        ctk.set_appearance_mode(saved_theme)
+
+        # Provedor e modelo
+        prov = "Google Gemini" if cfg.get("api_provider") == "gemini" else "OpenAI"
+        self.cfg_prov_var.set(prov)
+        self._on_provider_change(prov)
+        self.cfg_model_var.set(cfg.get("model_name", "gemini-2.5-flash"))
+
+        # API Key
+        key = cfg.get("api_key", "")
+        if key:
+            self.entry_key.insert(0, key)
+
+        # Região do quiz
+        reg = cfg.get("quiz_region", {})
+        if reg.get("configured", False):
+            self.lbl_area_status.configure(
+                text=f"Área: X={reg['x']} Y={reg['y']} ({reg['width']}x{reg['height']} px)",
+                text_color="#10B981"
+            )
+
+        # Botão próximo
+        nxt = cfg.get("next_button", {})
+        if nxt.get("configured", False):
+            self.lbl_next_status.configure(
+                text=f"Botão Próximo: X={nxt['x']} Y={nxt['y']}",
+                text_color="#10B981"
+            )
+
+        # Delay
+        delay = float(cfg.get("action_delay", 2.5))
+        self.slider_delay.set(delay)
+        self.lbl_delay_val.configure(text=f"{delay:.1f}s")
+
+        # Total do Cérebro
+        total = len(self.cerebro_manager.itens)
+        self.lbl_total_cerebro.configure(text=f"Total na Memória: {total}")
+
     def update_status_badge(self, state: str) -> None:
-        """Atualiza a cor e texto do badge de status de forma thread-safe."""
         def apply():
             if state == "EXECUTANDO":
-                self.status_badge.configure(text="● EXECUTANDO", text_color="#00E676", fg_color="#182E20")
+                self.status_badge.configure(
+                    text="● EXECUTANDO",
+                    text_color="#16A34A",
+                    fg_color=("#DCFCE7", "#14532D")
+                )
+            elif state == "ESCANEANDO":
+                self.status_badge.configure(
+                    text="● ESCANEANDO TELA",
+                    text_color="#0284C7",
+                    fg_color=("#E0F2FE", "#0C4A6E")
+                )
+            elif state == "ANALISANDO":
+                self.status_badge.configure(
+                    text="● ANALISANDO COM IA",
+                    text_color="#7C3AED",
+                    fg_color=("#EDE9FE", "#4C1D95")
+                )
+            elif state == "CLICANDO":
+                self.status_badge.configure(
+                    text="● CLICANDO RESPOSTA",
+                    text_color="#D97706",
+                    fg_color=("#FEF3C7", "#78350F")
+                )
             elif state == "PAUSADO":
-                self.status_badge.configure(text="● PAUSADO", text_color="#FFD600", fg_color="#2E2818")
+                self.status_badge.configure(
+                    text="● PAUSADO",
+                    text_color="#EAB308",
+                    fg_color=("#FEF9C3", "#713F12")
+                )
             else:
-                self.status_badge.configure(text="● PARADO", text_color="#FF5252", fg_color="#261C1C")
+                self.status_badge.configure(
+                    text="● PARADO",
+                    text_color="#EF4444",
+                    fg_color=("#FEE2E2", "#3B1E1E")
+                )
         self.after(0, apply)
 
     def enqueue_log(self, message: str, level: str = "INFO") -> None:
-        """Enfileira mensagem formatada no console de logs com timestamp."""
         def apply():
             now = datetime.datetime.now().strftime("%H:%M:%S")
             prefix = {
@@ -541,17 +1032,10 @@ class EasyQuizGUI(ctk.CTk):
                 "ERROR": "❌ [ERRO]"
             }.get(level, "[LOG]")
 
-            formatted_msg = f"[{now}] {prefix} {message}\n"
-            self.log_textbox.insert("end", formatted_msg)
+            self.log_textbox.insert("end", f"[{now}] {prefix} {message}\n")
             self.log_textbox.see("end")
-
         self.after(0, apply)
 
-    def _clear_logs(self) -> None:
-        """Limpa a caixa de texto de logs."""
-        self.log_textbox.delete("1.0", "end")
-
     def _on_close(self) -> None:
-        """Encerra a automação e fecha a aplicação seguramente."""
         self.engine.stop()
         self.destroy()

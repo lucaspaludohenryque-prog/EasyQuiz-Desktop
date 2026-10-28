@@ -1,76 +1,81 @@
-# EasyQuiz Desktop
+# Mastering Study Quiz Desktop
 
-Aplicação Windows independente desenvolvida para automação de resolução de quizzes e exames online utilizando **Visão Computacional**, **IA Multimodal** (Google Gemini / OpenAI) e **RPA (Robotic Process Automation)**.
-
----
-
-## 🏗 Arquitetura do Projeto
-
-```
-Mastering Study Quiz/
-│
-├── main.py              # Ponto de entrada principal com DPI Awareness para Windows
-├── gui.py               # Interface gráfica moderna em CustomTkinter (Dark Mode)
-├── automation.py        # Motor de automação RPA (mss + PyAutoGUI) em Thread dedicada
-├── ai_service.py        # Módulo de visão computacional multimodal com retorno JSON
-├── overlay.py           # Sobreposições translúcidas (Sniper) para calibração de tela
-├── config_manager.py    # Persistência segura de configurações locais em config.json
-├── build_exe.py         # Script automatizado de compilação com PyInstaller
-├── requirements.txt     # Dependências do ecossistema Python
-└── README.md            # Documentação técnica e guia operacional
-```
+Software desktop para Windows desenvolvido em Python para automação inteligente de quizzes e provas online utilizando **Visão Computacional**, **Inteligência Artificial Multimodal** (Google Gemini e OpenAI) e **Automação RPA** com o sistema **"Cérebro"** (persistência em pastas locais e exibição em tempo real na interface).
 
 ---
 
-## ⚡ Instalação das Dependências
+## 🌟 Principais Recursos
 
-Instale os pacotes necessários executando no PowerShell ou Prompt de Comando:
+1. **Tema Claro Padrão (Clean White):**
+   - Interface moderna em modo claro minimalista com tipografia nítida e cantos arredondados.
+   - Alternância instantânea (Switch) para **Modo Escuro (Dark Mode)** na barra lateral.
 
+2. **Cérebro em Tempo Real (Live Monitor):**
+   - Painel integrado no Dashboard que atualiza no mesmo instante em que a IA responde à questão.
+   - Exibição da miniatura/recorte analisado com `CTkImage`.
+   - **Etiqueta em Destaque:** `[ GRÁFICO ]`, `[ TABELA ]`, `[ DIAGRAMA ]`, `[ FÓRMULA ]`, `[ MAPA ]`, `[ TEXTO PURO ]`.
+   - Explicação contextual resumida gerada pela IA e indicação visual da alternativa clicada.
+
+3. **Explorar Cérebro (Galeria Interativa & Busca):**
+   - Grade rolável com todos os cards históricos salvos no disco.
+   - Barra de pesquisa textual em tempo real por palavras-chave ou matéria.
+   - Filtros rápidos por botões de categoria (`Todos`, `Gráficos`, `Tabelas`, `Diagramas`, `Fórmulas`, `Texto`).
+   - Modal com zoom e detalhes pedagógicos completos ao clicar no card.
+
+4. **Armazenamento Físico Estruturado (`Cerebro_Dados`):**
+   ```text
+   📁 Mastering_Study_Quiz/
+    ├── 🚀 MasteringStudyQuiz.exe
+    ├── ⚙️ config.json
+    └── 📁 Cerebro_Dados/
+         ├── 📄 database_cerebro.json
+         ├── 📁 Thumbnails/
+         └── 📁 Imagens_Contexto/
+              ├── 📁 Grafico/
+              │    └── 🖼️ img_001_Grafico.png
+              ├── 📁 Tabela/
+              ├── 📁 Diagrama/
+              ├── 📁 Formula/
+              └── 📁 Outros/
+   ```
+
+5. **Automação Segura e Atalhos Globais:**
+   - Calibração de área com tela translúcida (Sniper).
+   - Mapeamento de coordenada X, Y do botão de avançar questão.
+   - **`[F8]`**: Iniciar / Pausar.
+   - **`[ESC]`**: Parada de Emergência Imediata (além do Failsafe nos cantos da tela via PyAutoGUI).
+
+---
+
+## ⚡ Instalação e Execução
+
+### Pré-requisitos
+- Python 3.11+
+- Windows 10 ou 11 (com DPI scaling automático suportado)
+
+### Instalação de Dependências
 ```bash
 python -m pip install -r requirements.txt
 ```
 
----
-
-## 🚀 Como Executar em Modo de Desenvolvimento
-
+### Executar em Desenvolvimento
 ```bash
 python main.py
 ```
 
 ---
 
-## 🎮 Guia Operacional e Calibração
+## 📦 Compilação para `.exe` Standalone
 
-1. **Configurar IA**:
-   - Escolha o provedor (`Google Gemini` ou `OpenAI`).
-   - Cole sua Chave de API no campo correspondente e clique em **"Salvar Configurações de IA"**.
-2. **Calibrar Região do Quiz**:
-   - Clique em **"🔍 Selecionar Área do Quiz"**.
-   - A tela ficará escura em modo sniper. Clique e arraste o mouse cobrindo o quadrante onde aparecem o enunciado e as opções de resposta.
-3. **Calibrar Botão de Avançar**:
-   - Clique em **"🎯 Definir Botão Próximo"**.
-   - Clique com o botão esquerdo exatamente sobre o botão "Avançar" / "Próxima Pergunta" do quiz.
-4. **Iniciar Automação**:
-   - Clique em **"▶ Iniciar"** na interface ou pressione a tecla **`F8`** no teclado.
-   - Para pausar/retomar, pressione **`F8`**.
-   - Para parada de emergência imediata, pressione **`ESC`** ou arraste o mouse para o canto superior esquerdo da tela (Failsafe do PyAutoGUI).
+Para gerar o executável único independente:
 
----
-
-## 📦 Compilação do Executável (.exe)
-
-Para gerar o arquivo executável standalone (arquivo único sem necessidade de Python instalado):
-
-### Opção 1: Via script automatizado
-```bash
+```powershell
 python build_exe.py
 ```
 
-### Opção 2: Comando direto do PyInstaller
-```bash
-python -m PyInstaller --noconsole --onefile --clean --name "EasyQuiz" --collect-all customtkinter main.py
+Ou comando direto PyInstaller:
+```powershell
+python -m PyInstaller --noconsole --onefile --clean --name "MasteringStudyQuiz" --collect-all customtkinter main.py
 ```
 
-O arquivo compilado final estará disponível no diretório:
-`dist/EasyQuiz.exe`
+O arquivo final pronto para uso estará em: `dist\MasteringStudyQuiz.exe`.

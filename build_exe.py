@@ -1,20 +1,18 @@
 """
-Script de Compilação Automatizada - EasyQuiz Desktop
-Gera o executável standalone (.exe) com PyInstaller garantindo empacotamento completo dos assets.
+Script de Compilação Automatizada - Mastering Study Quiz
+Empacota a aplicação em um executável (.exe) único com assets e customtkinter.
 """
 
 import subprocess
 import sys
 import os
-import shutil
 
 
 def build_executable():
-    print("=" * 60)
-    print("Iniciando compilação do EasyQuiz Desktop para Windows (.exe)")
-    print("=" * 60)
+    print("=" * 65)
+    print("Iniciando compilação do Mastering Study Quiz para Windows (.exe)")
+    print("=" * 65)
 
-    # Comando base do PyInstaller
     cmd = [
         sys.executable,
         "-m",
@@ -22,7 +20,7 @@ def build_executable():
         "--noconsole",
         "--onefile",
         "--clean",
-        "--name=EasyQuiz",
+        "--name=MasteringStudyQuiz",
         "--collect-all=customtkinter",
         "main.py"
     ]
@@ -34,15 +32,15 @@ def build_executable():
     result = subprocess.run(cmd)
 
     if result.returncode == 0:
-        exe_path = os.path.abspath(os.path.join("dist", "EasyQuiz.exe"))
-        print("\n" + "=" * 60)
+        exe_path = os.path.abspath(os.path.join("dist", "MasteringStudyQuiz.exe"))
+        print("\n" + "=" * 65)
         print("✅ COMPILAÇÃO CONCLUÍDA COM SUCESSO!")
-        print(f"Executável gerado em: {exe_path}")
-        print("=" * 60)
+        print(f"Executável final gerado em: {exe_path}")
+        print("=" * 65)
     else:
-        print("\n" + "=" * 60)
-        print("❌ ERRO DURANTE A COMPILAÇÃO. Verifique as mensagens acima.")
-        print("=" * 60)
+        print("\n" + "=" * 65)
+        print("❌ ERRO DURANTE A COMPILAÇÃO. Verifique o log acima.")
+        print("=" * 65)
 
 
 if __name__ == "__main__":

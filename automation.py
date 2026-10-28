@@ -1,6 +1,7 @@
 """
-Módulo de Automação de Interface (RPA) - EasyQuiz Desktop
-Controla a captura em tempo real com mss, resolução com IA e automação do mouse via PyAutoGUI.
+Módulo de Automação de Interface (RPA) - Mastering Study Quiz
+Captura a tela com mss, consulta a IA, recorta elementos visuais,
+registra no Cérebro em tempo real e comanda o mouse com PyAutoGUI.
 """
 
 import time
@@ -11,27 +12,31 @@ import mss
 import pyautogui
 
 from config_manager import ConfigManager
-from ai_service import AIService, QuizSolution
+from ai_vision import AIVisionService, VisionAnalysisResult
+from cerebro_manager import CerebroManager, CerebroItem
 
-# Configura segurança padrão do PyAutoGUI
 pyautogui.FAILSAFE = True
 pyautogui.PAUSE = 0.05
 
 
 class AutomationEngine:
-    """Motor de execução em thread separada com suporte a pausa, retomada e parada emergencial."""
+    """Motor de execução do quiz com sincronização contínua com a interface gráfica."""
 
     def __init__(
         self,
         config_manager: ConfigManager,
-        ai_service: AIService,
+        ai_service: AIVisionService,
+        cerebro_manager: CerebroManager,
         log_callback: Callable[[str, str], None],
-        status_callback: Callable[[str], None]
+        status_callback: Callable[[str], None],
+        live_cerebro_callback: Optional[Callable[[CerebroItem], None]] = None
     ):
         self.config_manager = config_manager
         self.ai_service = ai_service
+        self.cerebro_manager = cerebro_manager
         self.log_callback = log_callback
         self.status_callback = status_callback
+        self.live_cerebro_callback = live_cerebro_callback
 
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
@@ -47,21 +52,20 @@ class AutomationEngine:
         return self._is_active and self._pause_event.is_set()
 
     def start(self) -> bool:
-        """Inicia ou retoma o loop de automação."""
-        quiz_region = self.config_manager.get("quiz_region", {})
-        if not quiz_region.get("configured", False):
-            self.log_callback("ERRO: Defina a Área do Quiz antes de iniciar a automação.", "ERROR")
+        region = self.config_manager.get("quiz_region", {})
+        if not region.get("configured", False):
+            self.log_callback("ERRO: Delimite a Área do Quiz antes de iniciar.", "ERROR")
             return False
 
         if not self.config_manager.get("api_key"):
-            self.log_callback("ERRO: Insira e salve sua API Key antes de iniciar.", "ERROR")
+            self.log_callback("ERRO: Configure sua API Key no painel Configurações.", "ERROR")
             return False
 
         if self._thread and self._thread.is_alive():
             if self._pause_event.is_set():
                 self._pause_event.clear()
                 self.status_callback("EXECUTANDO")
-                self.log_callback("Automação retomada pelo usuário.", "INFO")
+                self.log_callback("Automação retomada.", "INFO")
                 return True
             return True
 
@@ -71,18 +75,16 @@ class AutomationEngine:
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
         self.status_callback("EXECUTANDO")
-        self.log_callback("Iniciando loop de automação inteligente...", "SUCCESS")
+        self.log_callback("Iniciando varredura automatizada com IA Multimodal...", "SUCCESS")
         return True
 
     def pause(self) -> None:
-        """Pausa a automação mantendo a thread em espera."""
         if self._is_active and not self._pause_event.is_set():
             self._pause_event.set()
             self.status_callback("PAUSADO")
             self.log_callback("Automação pausada temporariamente.", "WARNING")
 
     def toggle_play_pause(self) -> None:
-        """Alterna entre executar e pausar (útil para hotkeys como F8)."""
         if not self._is_active:
             self.start()
         elif self.is_paused:
@@ -91,140 +93,159 @@ class AutomationEngine:
             self.pause()
 
     def stop(self) -> None:
-        """Interrompe a thread de automação imediatamente."""
         self._stop_event.set()
         self._pause_event.clear()
         self._is_active = False
         self.status_callback("PARADO")
-        self.log_callback("Automação encerrada com sucesso.", "INFO")
+        self.log_callback("Automação finalizada.", "INFO")
 
     def _run_loop(self) -> None:
-        """Ciclo principal de execução executado na worker thread."""
-        question_counter = 0
+        question_idx = 0
 
         while not self._stop_event.is_set():
-            # Tratamento de pausa
             if self._pause_event.is_set():
-                time.sleep(0.3)
+                time.sleep(0.2)
                 continue
 
-            question_counter += 1
-            self.log_callback(f"--- Processando Questão #{question_counter} ---", "INFO")
+            question_idx += 1
+            self.log_callback(f"─── Escaneando Questão #{question_idx} ───", "INFO")
 
             try:
-                # 1. Captura da região configurada
+                # 1. Captura com mss
                 region = self.config_manager.get("quiz_region", {})
                 x = int(region.get("x", 0))
                 y = int(region.get("y", 0))
                 w = int(region.get("width", 100))
                 h = int(region.get("height", 100))
 
-                self.log_callback(f"Capturando região da tela ({w}x{h} px)...", "INFO")
-                screenshot_pil = self._capture_screen_region(x, y, w, h)
+                self.status_callback("ESCANEANDO")
+                self.log_callback(f"Capturando tela ({w}x{h} px)...", "INFO")
+                screenshot_pil = self._capture_region(x, y, w, h)
 
                 if self._stop_event.is_set():
                     break
 
-                # 2. Consulta à Inteligência Artificial
-                provider = self.config_manager.get("api_provider", "gemini").upper()
-                model = self.config_manager.get("model_name", "")
-                self.log_callback(f"Consultando IA via {provider} ({model})...", "INFO")
+                # 2. Consulta à IA Multimodal
+                self.status_callback("ANALISANDO")
+                prov = self.config_manager.get("api_provider", "gemini").upper()
+                mod = self.config_manager.get("model_name", "")
+                self.log_callback(f"Enviando para IA Multimodal [{prov}: {mod}]...", "INFO")
 
-                solution: QuizSolution = self.ai_service.solve_quiz(screenshot_pil)
+                result: VisionAnalysisResult = self.ai_service.analyze_quiz_image(screenshot_pil)
 
                 if self._stop_event.is_set():
                     break
 
-                if not solution.success:
-                    self.log_callback(f"Falha na IA: {solution.error_message}", "ERROR")
-                    self.log_callback("Aguardando 4 segundos para nova tentativa...", "WARNING")
-                    self._interruptible_sleep(4.0)
+                if not result.success:
+                    self.log_callback(f"Falha na IA: {result.error_message}", "ERROR")
+                    self._interruptible_sleep(3.5)
                     continue
 
-                # 3. Processamento das coordenadas
-                box = solution.target_box_normalized
-                center_x_norm = (box.get("xmin", 0.5) + box.get("xmax", 0.5)) / 2.0
-                center_y_norm = (box.get("ymin", 0.5) + box.get("ymax", 0.5)) / 2.0
+                # 3. Recorte e Registro no Cérebro
+                recorte_elemento: Optional[Image.Image] = None
+                if result.possui_elemento_visual:
+                    bbox = result.bounding_box_elemento
+                    ymin, xmin, ymax, xmax = bbox.get("ymin", 0), bbox.get("xmin", 0), bbox.get("ymax", 0), bbox.get("xmax", 0)
+                    if ymax > ymin and xmax > xmin:
+                        crop_box = (
+                            int(xmin * w),
+                            int(ymin * h),
+                            int(xmax * w),
+                            int(ymax * h)
+                        )
+                        recorte_elemento = screenshot_pil.crop(crop_box)
+                    else:
+                        recorte_elemento = screenshot_pil.copy()
+                else:
+                    # Salva uma miniatura geral se for texto puro para compor o histórico
+                    recorte_elemento = screenshot_pil.copy()
 
-                click_x = x + int(center_x_norm * w)
-                click_y = y + int(center_y_norm * h)
+                # 4. Cálculo das Coordenadas Finais da Resposta
+                coord_norm = result.coordenadas_resposta
+                click_x = x + int(coord_norm["x_norm"] * w)
+                click_y = y + int(coord_norm["y_norm"] * h)
 
-                conf_percent = solution.confidence * 100
-                self.log_callback(f"Questão: '{solution.question}'", "INFO")
-                self.log_callback(f"Resposta IA: '{solution.chosen_answer}' (Confiança: {conf_percent:.1f}%)", "SUCCESS")
-                self.log_callback(f"Coordenadas calculadas: ({click_x}, {click_y})", "INFO")
+                # 5. Persistência no Cérebro
+                cerebro_item = self.cerebro_manager.add_item(
+                    pergunta=result.pergunta_extraida,
+                    resposta=result.alternativa_correta,
+                    confianca=result.confianca,
+                    possui_elemento_visual=result.possui_elemento_visual,
+                    categoria=result.categoria_imagem,
+                    contexto=result.contexto_imagem,
+                    imagem_recorte=recorte_elemento,
+                    coordenadas_clique={"x": click_x, "y": click_y}
+                )
 
-                # 4. Movimento e Clique na Resposta
+                # Atualização imediata do painel "Cérebro em Tempo Real" na GUI
+                if self.live_cerebro_callback:
+                    self.live_cerebro_callback(cerebro_item)
+
+                categoria_badge = f"[{result.categoria_imagem.upper()}]"
+                self.log_callback(f"Cérebro Registrado: {categoria_badge} {result.pergunta_extraida[:65]}...", "SUCCESS")
+                self.log_callback(f"Resposta Correta: {result.alternativa_correta}", "SUCCESS")
+
+                # 6. Ação do Mouse (Clique na Resposta)
+                self.status_callback("CLICANDO")
+                self.log_callback(f"Clicando na alternativa em ({click_x}, {click_y})...", "INFO")
                 if self.config_manager.get("smooth_mouse", True):
                     pyautogui.moveTo(click_x, click_y, duration=0.35, tween=pyautogui.easeOutQuad)
                 else:
                     pyautogui.moveTo(click_x, click_y)
 
                 pyautogui.click()
-                self.log_callback("Clique na resposta realizado.", "SUCCESS")
 
-                # 5. Delay configurado entre resposta e avançar
-                action_delay = float(self.config_manager.get("action_delay", 2.0))
-                self.log_callback(f"Aguardando delay pós-resposta ({action_delay:.1f}s)...", "INFO")
-                if not self._interruptible_sleep(action_delay):
+                # 7. Delay entre resposta e próximo
+                delay = float(self.config_manager.get("action_delay", 2.0))
+                self.log_callback(f"Aguardando delay pós-resposta ({delay:.1f}s)...", "INFO")
+                if not self._interruptible_sleep(delay):
                     break
 
-                # 6. Avanço Automático para a Próxima Pergunta (se configurado)
-                auto_advance = self.config_manager.get("auto_advance", True)
+                # 8. Avanço Automático para a Próxima Pergunta
+                auto_adv = self.config_manager.get("auto_advance", True)
                 next_btn = self.config_manager.get("next_button", {})
 
-                if auto_advance and next_btn.get("configured", False):
-                    next_x = int(next_btn.get("x", 0))
-                    next_y = int(next_btn.get("y", 0))
-
-                    self.log_callback(f"Clicando no botão de avançar em ({next_x}, {next_y})...", "INFO")
-                    if self.config_manager.get("smooth_mouse", True):
-                        pyautogui.moveTo(next_x, next_y, duration=0.25, tween=pyautogui.easeOutQuad)
-                    else:
-                        pyautogui.moveTo(next_x, next_y)
+                if auto_adv and next_btn.get("configured", False):
+                    nx = int(next_btn["x"])
+                    ny = int(next_btn["y"])
+                    self.log_callback(f"Avançando questão no botão ({nx}, {ny})...", "INFO")
+                    pyautogui.moveTo(nx, ny, duration=0.25, tween=pyautogui.easeOutQuad)
                     pyautogui.click()
 
-                    # Tempo para a página web carregar a próxima pergunta
                     trans_delay = float(self.config_manager.get("transition_delay", 1.5))
-                    self.log_callback(f"Aguardando carregamento da nova questão ({trans_delay:.1f}s)...", "INFO")
+                    self.log_callback(f"Aguardando carregamento da nova tela ({trans_delay:.1f}s)...", "INFO")
                     if not self._interruptible_sleep(trans_delay):
                         break
                 else:
-                    self.log_callback("Avanço automático desativado ou botão próximo não definido.", "WARNING")
-                    # Pequena pausa antes de checar a tela novamente
-                    if not self._interruptible_sleep(2.0):
+                    self.log_callback("Botão Próximo não definido. Aguardando novo ciclo...", "WARNING")
+                    if not self._interruptible_sleep(2.5):
                         break
 
             except pyautogui.FailSafeException:
-                self.log_callback("PARADA DE EMERGÊNCIA: Mouse movido para o canto da tela!", "ERROR")
+                self.log_callback("PARADA DE EMERGÊNCIA: Mouse no canto da tela!", "ERROR")
                 self.stop()
                 break
             except Exception as e:
-                self.log_callback(f"Erro inesperado no loop: {str(e)}", "ERROR")
+                self.log_callback(f"Erro no ciclo: {str(e)}", "ERROR")
                 if not self._interruptible_sleep(3.0):
                     break
 
         self._is_active = False
         self.status_callback("PARADO")
 
-    def _capture_screen_region(self, x: int, y: int, width: int, height: int) -> Image.Image:
-        """Captura ultra-rápida de um quadrante da tela utilizando a biblioteca mss."""
+    def _capture_region(self, x: int, y: int, width: int, height: int) -> Image.Image:
         with mss.mss() as sct:
-            monitor = {"top": y, "left": x, "width": width, "height": height}
-            sct_img = sct.grab(monitor)
-            # Converte BGRA de mss para RGB PIL Image
-            img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
-            return img
+            mon = {"top": y, "left": x, "width": width, "height": height}
+            sct_img = sct.grab(mon)
+            return Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
 
     def _interruptible_sleep(self, seconds: float) -> bool:
-        """Pausa fracionada que responde imediatamente ao evento de parada."""
         steps = int(seconds / 0.1)
         for _ in range(steps):
             if self._stop_event.is_set():
                 return False
             time.sleep(0.1)
-        # Fração restante
-        remainder = seconds - (steps * 0.1)
-        if remainder > 0:
-            time.sleep(remainder)
+        rem = seconds - (steps * 0.1)
+        if rem > 0:
+            time.sleep(rem)
         return not self._stop_event.is_set()
