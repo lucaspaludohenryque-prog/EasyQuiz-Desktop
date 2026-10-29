@@ -1,128 +1,240 @@
 """
-Módulo de Integração com Serviços de Inteligência Artificial Multimodal (Visão)
-Suporta Google Gemini e OpenAI (GPT-4o / GPT-4o-mini) com retorno estrito em JSON estruturado.
+Módulo de Inteligência Artificial e Visão Computacional - Mastering Study Quiz
+Integração com Google Gemini (gemini-2.5-flash) com suporte a:
+1. Envio da imagem recortada com prompt de sistema estrito.
+2. Extração e validação do JSON com 'resposta', 'x_percent' e 'y_percent'.
+3. Pool de Chaves com rotação automática em caso de Rate Limit (Erro 429).
+4. Consulta à Memória RAG Local (Zero Tokens) antes da chamada de API.
 """
 
-import base64
 import io
+import time
 import json
 import re
+import base64
 import urllib.request
 import urllib.error
-from dataclasses import dataclass
-from typing import Dict, Any, Optional
+from dataclasses import dataclass, asdict
+from typing import Dict, Any, Optional, Tuple
 from PIL import Image
+
+from config_manager import ConfigManager
+from brain_storage import BrainStorage
 
 
 @dataclass
-class QuizSolution:
-    """Estrutura padronizada do resultado da resolução da questão."""
+class QuizSolutionResult:
+    """Estrutura validada da resposta da IA para a resolução da questão."""
     success: bool
-    question: str
-    chosen_answer: str
-    confidence: float
-    target_box_normalized: Dict[str, float]
-    raw_response: str
+    resposta: str
+    x_percent: float
+    y_percent: float
+    rationale: str
+    confianca: float
+    categoria: str
+    contexto_imagem: str
+    tokens_usados: int
+    latencia_ms: int
+    is_rag_cache: bool = False
     error_message: Optional[str] = None
 
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
 
-SYSTEM_PROMPT = """Você é um especialista em automação e visão computacional para resolução de exames e quizzes de múltipla escolha.
-Sua tarefa é analisar a imagem capturada contendo uma questão e suas opções de resposta.
 
-Instruções Estritas:
-1. Leia o enunciado e analise cada uma das alternativas visíveis.
-2. Determine com máxima precisão a resposta correta da questão.
-3. Localize as coordenadas exatas da área clicável da alternativa correta na imagem (o botão de seleção, checkbox ou texto da linha).
-4. Retorne OBRIGATORIAMENTE APENAS um objeto JSON válido, sem texto explicativo adicional antes ou depois.
+SYSTEM_PROMPT = """Você é um assistente de provas. Leia a imagem que contém uma questão e suas alternativas. Retorne estritamente um JSON com a chave 'resposta' contendo o texto da alternativa correta, e as chaves 'x_percent' e 'y_percent' indicando a posição relativa (de 0.0 a 1.0) de onde fica a bolinha/caixa de seleção da resposta correta na imagem, para que um robô possa clicar.
 
-Formato JSON Obrigatório:
+Retorne OBRIGATORIAMENTE APENAS o JSON válido no seguinte formato:
 {
-  "question": "Resumo do enunciado identificado",
-  "chosen_answer": "Texto da alternativa correta selecionada",
-  "confidence": 0.95,
-  "target_box_normalized": {
-    "ymin": 0.42,
-    "xmin": 0.08,
-    "ymax": 0.48,
-    "xmax": 0.92
-  }
+  "resposta": "Texto da alternativa correta",
+  "x_percent": 0.08,
+  "y_percent": 0.45,
+  "rationale": "Explicação resumida do porquê esta é a alternativa correta",
+  "confianca": 0.95,
+  "categoria": "Texto",
+  "contexto_visual": "Descrição do que a imagem contém se houver gráfico ou tabela"
 }
-
-Regras das Coordenadas:
-- ymin, xmin, ymax, xmax DEVEM ser valores decimais float normalizados entre 0.0 e 1.0 relativos à altura e largura totais da imagem.
-- O retângulo deve apontar exatamente para onde o mouse deve clicar para selecionar a opção correta.
 """
 
 
 class AIService:
-    """Serviço unificado para envio de imagem e obtenção da solução via LLMs Multimodais."""
+    """Serviço de IA Multimodal para resolução de quizzes com Google Gemini."""
 
-    def __init__(self, provider: str, api_key: str, model_name: str):
-        self.provider = provider.lower().strip()
-        self.api_key = api_key.strip()
-        self.model_name = model_name.strip()
+    def __init__(
+        self,
+        config_manager: Optional[ConfigManager] = None,
+        brain_storage: Optional[BrainStorage] = None
+    ):
+        self.config_manager = config_manager or ConfigManager()
+        self.brain_storage = brain_storage or BrainStorage()
 
-    def update_credentials(self, provider: str, api_key: str, model_name: str) -> None:
-        """Atualiza provedor, chave de API e modelo em tempo de execução."""
-        self.provider = provider.lower().strip()
-        self.api_key = api_key.strip()
-        self.model_name = model_name.strip()
+    def resolve_question_image(
+        self,
+        image: Image.Image,
+        max_retries_keys: int = 3
+    ) -> QuizSolutionResult:
+        """
+        Envia a imagem recortada para a IA e retorna a solução estruturada com coordenadas.
+        Consulta primeiro a memória RAG local (Zero Tokens).
+        Executa rotação automática de chave em caso de Rate Limit (Erro 429).
+        """
+        start_time = time.time()
 
-    def solve_quiz(self, image: Image.Image) -> QuizSolution:
-        """Processa a imagem da questão e retorna a alternativa e coordenadas calculadas."""
-        if not self.api_key:
-            return QuizSolution(
-                success=False,
-                question="",
-                chosen_answer="",
-                confidence=0.0,
-                target_box_normalized={"ymin": 0.5, "xmin": 0.5, "ymax": 0.5, "xmax": 0.5},
-                raw_response="",
-                error_message="Chave de API não informada. Configure a API Key na interface."
-            )
+        # 1. Consulta à Memória RAG Local (Zero Tokens)
+        if self.config_manager.get("enable_rag_memory", True) and self.brain_storage:
+            try:
+                cached = self.brain_storage.lookup_rag("", question_image=image)
+                if cached:
+                    lat_ms = int((time.time() - start_time) * 1000)
+                    coords = cached.get("coordenadas", {})
+                    return QuizSolutionResult(
+                        success=True,
+                        resposta=cached.get("resposta", ""),
+                        x_percent=float(coords.get("x_percent", 0.08)),
+                        y_percent=float(coords.get("y_percent", 0.45)),
+                        rationale=cached.get("rationale", "Resposta recuperada da Memória RAG Local."),
+                        confianca=1.0,
+                        categoria=cached.get("categoria", "Texto"),
+                        contexto_imagem=cached.get("contexto_imagem", ""),
+                        tokens_usados=0,
+                        latencia_ms=lat_ms,
+                        is_rag_cache=True
+                    )
+            except Exception as e:
+                print(f"[IA] Aviso na consulta RAG local: {e}")
 
-        try:
-            # Converte a imagem PIL para JPEG em memória
-            buffered = io.BytesIO()
-            # Converte RGBA para RGB se necessário para salvar como JPEG
-            if image.mode in ("RGBA", "P"):
-                image = image.convert("RGB")
-            image.save(buffered, format="JPEG", quality=90)
-            img_bytes = buffered.getvalue()
-            b64_image = base64.b64encode(img_bytes).decode("utf-8")
+        # 2. Resolução Online via API Gemini com Pool de Chaves
+        keys = self.config_manager.get_all_api_keys()
+        attempts = 0
+        total_attempts = max(1, len(keys)) if keys else 1
 
-            if self.provider == "gemini":
-                raw_text = self._call_gemini_api(b64_image)
-            elif self.provider == "openai":
-                raw_text = self._call_openai_api(b64_image)
-            else:
-                return QuizSolution(
+        last_error = ""
+
+        while attempts < total_attempts:
+            current_key = self.config_manager.get_active_api_key()
+            if not current_key:
+                return QuizSolutionResult(
                     success=False,
-                    question="",
-                    chosen_answer="",
-                    confidence=0.0,
-                    target_box_normalized={},
-                    raw_response="",
-                    error_message=f"Provedor desconhecido: '{self.provider}'"
+                    resposta="",
+                    x_percent=0.0,
+                    y_percent=0.0,
+                    rationale="",
+                    confianca=0.0,
+                    categoria="Texto",
+                    contexto_imagem="",
+                    tokens_usados=0,
+                    latencia_ms=0,
+                    error_message="Nenhuma chave de API configurada no aplicativo. Insira uma chave Gemini nas Configurações."
                 )
 
-            return self._parse_json_response(raw_text)
+            model_name = self.config_manager.get("model_name", "gemini-2.5-flash")
 
-        except Exception as ex:
-            return QuizSolution(
-                success=False,
-                question="",
-                chosen_answer="",
-                confidence=0.0,
-                target_box_normalized={},
-                raw_response="",
-                error_message=f"Erro na requisição à IA: {str(ex)}"
-            )
+            try:
+                raw_text, tokens = self._call_gemini_api(
+                    api_key=current_key,
+                    model_name=model_name,
+                    image=image
+                )
 
-    def _call_gemini_api(self, b64_image: str) -> str:
-        """Envia requisição direta para a Google Gemini REST API v1beta."""
-        model = self.model_name if self.model_name else "gemini-2.5-flash"
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={self.api_key}"
+                parsed_json = self._parse_json_response(raw_text)
+                if not parsed_json:
+                    raise ValueError(f"A IA não retornou um JSON válido: {raw_text[:120]}")
+
+                lat_ms = int((time.time() - start_time) * 1000)
+
+                resp_str = str(parsed_json.get("resposta", "")).strip()
+                x_pct = float(parsed_json.get("x_percent", 0.08))
+                y_pct = float(parsed_json.get("y_percent", 0.45))
+                # Limita coordenadas percentuais entre 0.0 e 1.0
+                x_pct = max(0.0, min(1.0, x_pct))
+                y_pct = max(0.0, min(1.0, y_pct))
+
+                rationale = str(parsed_json.get("rationale", "Alternativa selecionada por raciocínio lógico da IA."))
+                conf = float(parsed_json.get("confianca", 0.95))
+                categoria = str(parsed_json.get("categoria", "Texto"))
+                contexto_vis = str(parsed_json.get("contexto_visual", ""))
+
+                result = QuizSolutionResult(
+                    success=True,
+                    resposta=resp_str,
+                    x_percent=x_pct,
+                    y_percent=y_pct,
+                    rationale=rationale,
+                    confianca=conf,
+                    categoria=categoria,
+                    contexto_imagem=contexto_vis,
+                    tokens_usados=tokens,
+                    latencia_ms=lat_ms,
+                    is_rag_cache=False
+                )
+
+                # Salva a sessão no Cérebro para aprendizado RAG futuro
+                if self.brain_storage:
+                    try:
+                        self.brain_storage.save_session(
+                            pergunta=resp_str,
+                            resposta=resp_str,
+                            rationale=rationale,
+                            confianca=conf,
+                            categoria=categoria,
+                            contexto_imagem=contexto_vis,
+                            imagem_recorte=image,
+                            coordenadas_clique={"x_percent": x_pct, "y_percent": y_pct},
+                            prompt_enviado=SYSTEM_PROMPT,
+                            modelo=model_name,
+                            latencia_ms=lat_ms,
+                            tokens_usados=tokens
+                        )
+                    except Exception as e:
+                        print(f"[IA] Aviso ao persistir sessão no Cérebro: {e}")
+
+                return result
+
+            except urllib.error.HTTPError as http_err:
+                last_error = f"HTTP {http_err.code}: {http_err.reason}"
+                if http_err.code in (429, 403) and len(keys) > 1:
+                    print(f"[IA] Limite atingido na chave atual (HTTP {http_err.code}). Acionando rotação automática...")
+                    self.config_manager.rotate_api_key(reason=f"HTTP {http_err.code}")
+                    attempts += 1
+                    time.sleep(0.3)
+                    continue
+                else:
+                    break
+            except Exception as e:
+                last_error = str(e)
+                if "429" in last_error and len(keys) > 1:
+                    self.config_manager.rotate_api_key(reason="Quota / 429")
+                    attempts += 1
+                    time.sleep(0.3)
+                    continue
+                break
+
+        return QuizSolutionResult(
+            success=False,
+            resposta="",
+            x_percent=0.0,
+            y_percent=0.0,
+            rationale="",
+            confianca=0.0,
+            categoria="Texto",
+            contexto_imagem="",
+            tokens_usados=0,
+            latencia_ms=int((time.time() - start_time) * 1000),
+            error_message=f"Falha na análise da IA: {last_error}"
+        )
+
+    def _call_gemini_api(self, api_key: str, model_name: str, image: Image.Image) -> Tuple[str, int]:
+        """
+        Envia a imagem e o prompt para a API do Google Gemini via endpoint REST universal.
+        Não depende de versão específica de SDK no cliente, garantindo 100% de estabilidade.
+        """
+        # Converte a imagem em JPEG base64 em memória
+        buffer = io.BytesIO()
+        image.save(buffer, format="JPEG", quality=88)
+        img_b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+        clean_model = model_name if model_name.startswith("gemini") else "gemini-2.5-flash"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{clean_model}:generateContent?key={api_key}"
 
         payload = {
             "contents": [
@@ -132,7 +244,7 @@ class AIService:
                         {
                             "inline_data": {
                                 "mime_type": "image/jpeg",
-                                "data": b64_image
+                                "data": img_b64
                             }
                         }
                     ]
@@ -140,126 +252,57 @@ class AIService:
             ],
             "generationConfig": {
                 "temperature": 0.1,
-                "response_mime_type": "application/json"
+                "responseMimeType": "application/json"
             }
         }
 
-        data = json.dumps(payload).encode("utf-8")
+        json_bytes = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
             url,
-            data=data,
-            headers={"Content-Type": "application/json"}
+            data=json_bytes,
+            headers={"Content-Type": "application/json"},
+            method="POST"
         )
+
+        with urllib.request.urlopen(req, timeout=18) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+
+        candidates = data.get("candidates", [])
+        if not candidates:
+            raise ValueError("Nenhuma resposta gerada pela API do Gemini.")
+
+        parts = candidates[0].get("content", {}).get("parts", [])
+        text_response = parts[0].get("text", "") if parts else ""
+
+        usage = data.get("usageMetadata", {})
+        tokens = usage.get("totalTokenCount", 180)
+
+        return text_response, tokens
+
+    def _parse_json_response(self, text: str) -> Optional[Dict[str, Any]]:
+        """Limpa tags markdown e decodifica o JSON retornado."""
+        if not text:
+            return None
+
+        clean = text.strip()
+        # Remove blocos markdown `json ... `
+        if "`" in clean:
+            match = re.search(r"`(?:json)?\s*([\s\S]*?)\s*`", clean)
+            if match:
+                clean = match.group(1).strip()
 
         try:
-            with urllib.request.urlopen(req, timeout=30) as response:
-                res_data = json.loads(response.read().decode("utf-8"))
-                candidates = res_data.get("candidates", [])
-                if not candidates:
-                    raise ValueError("Nenhum candidato de resposta retornado pelo Gemini.")
-                parts = candidates[0].get("content", {}).get("parts", [])
-                if not parts:
-                    raise ValueError("Resposta vazia retornada pelo Gemini.")
-                return parts[0].get("text", "")
-        except urllib.error.HTTPError as http_err:
-            error_body = http_err.read().decode("utf-8", errors="ignore")
-            raise RuntimeError(f"HTTP {http_err.code} Gemini: {error_body}")
+            return json.loads(clean)
+        except Exception:
+            # Tenta encontrar o primeiro bloco delimitado por chaves { ... }
+            match = re.search(r"(\{[\s\S]*\})", clean)
+            if match:
+                try:
+                    return json.loads(match.group(1))
+                except Exception:
+                    pass
+            return None
 
-    def _call_openai_api(self, b64_image: str) -> str:
-        """Envia requisição direta para a OpenAI Chat Completions API."""
-        model = self.model_name if self.model_name else "gpt-4o-mini"
-        url = "https://api.openai.com/v1/chat/completions"
 
-        payload = {
-            "model": model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": SYSTEM_PROMPT},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{b64_image}",
-                                "detail": "high"
-                            }
-                        }
-                    ]
-                }
-            ],
-            "temperature": 0.1,
-            "response_format": {"type": "json_object"}
-        }
-
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            url,
-            data=data,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.api_key}"
-            }
-        )
-
-        try:
-            with urllib.request.urlopen(req, timeout=30) as response:
-                res_data = json.loads(response.read().decode("utf-8"))
-                choices = res_data.get("choices", [])
-                if not choices:
-                    raise ValueError("Nenhuma escolha retornada pela OpenAI.")
-                return choices[0].get("message", {}).get("content", "")
-        except urllib.error.HTTPError as http_err:
-            error_body = http_err.read().decode("utf-8", errors="ignore")
-            raise RuntimeError(f"HTTP {http_err.code} OpenAI: {error_body}")
-
-    def _parse_json_response(self, text: str) -> QuizSolution:
-        """Extrai e valida o JSON retornado pela IA, lidando com markdown e formatações."""
-        clean_text = text.strip()
-        # Remove blocos markdown caso existam
-        if clean_text.startswith("```json"):
-            clean_text = clean_text[7:]
-        elif clean_text.startswith("```"):
-            clean_text = clean_text[3:]
-        if clean_text.endswith("```"):
-            clean_text = clean_text[:-3]
-        clean_text = clean_text.strip()
-
-        # Busca bloco JSON com regex se ainda houver resíduo
-        match = re.search(r"\{[\s\S]*\}", clean_text)
-        if match:
-            clean_text = match.group(0)
-
-        data = json.loads(clean_text)
-
-        question = str(data.get("question", "Questão identificada"))
-        chosen_answer = str(data.get("chosen_answer", "Alternativa selecionada"))
-        confidence = float(data.get("confidence", 1.0))
-        box = data.get("target_box_normalized", {})
-
-        # Validação e saneamento dos limites das coordenadas normalizadas
-        ymin = max(0.0, min(1.0, float(box.get("ymin", 0.5))))
-        xmin = max(0.0, min(1.0, float(box.get("xmin", 0.1))))
-        ymax = max(0.0, min(1.0, float(box.get("ymax", 0.55))))
-        xmax = max(0.0, min(1.0, float(box.get("xmax", 0.9))))
-
-        if ymax <= ymin:
-            ymax = min(1.0, ymin + 0.05)
-        if xmax <= xmin:
-            xmax = min(1.0, xmin + 0.1)
-
-        sanitized_box = {
-            "ymin": ymin,
-            "xmin": xmin,
-            "ymax": ymax,
-            "xmax": xmax
-        }
-
-        return QuizSolution(
-            success=True,
-            question=question,
-            chosen_answer=chosen_answer,
-            confidence=confidence,
-            target_box_normalized=sanitized_box,
-            raw_response=text,
-            error_message=None
-        )
+# Alias de compatibilidade
+AIVisionService = AIService

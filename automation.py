@@ -1,297 +1,260 @@
 """
-Motor de Automação RPA e Autopilot - Mastering Study Quiz
-Gerencia o loop de resolução automática, cronômetros, gravação física no Cérebro,
-suporte a modo Dry-Run (simulação) e emissão de bips de feedback sonoro.
+Módulo de Automação de Interface (RPA), Captura de Tela e Controle de Mouse
+Mastering Study Quiz - Etapa 2
+Fornece:
+1. Ferramenta de Recorte Transparente em Tela Cheia (Bounding Box Vermelho).
+2. Mapeador de Coordenadas do Botão Próximo.
+3. Captura rápida de região de tela via mss em memória (RGB PIL.Image).
+4. Controle suave de mouse com PyAutoGUI e Tweening.
+5. Auto-digitação humanizada para questões discursivas.
 """
 
 import time
+import random
 import threading
-from typing import Callable, Optional
+import tkinter as tk
+from typing import Callable, Optional, Tuple, Dict, Any
 from PIL import Image
 import mss
 import pyautogui
 
-try:
-    import winsound
-except ImportError:
-    winsound = None
-
-from config_manager import ConfigManager
-from ai_vision import AIVisionService, VisionAnalysisResult
-from cerebro_manager import CerebroManager, QuestionSessionRecord
-from metrics_tracker import MetricsTracker
-
+# Configurações de segurança do PyAutoGUI
 pyautogui.FAILSAFE = True
 pyautogui.PAUSE = 0.05
 
 
-class AutomationEngine:
-    """Motor de execução Autopilot com suporte a Dry-Run e sincronização contínua."""
+class TransparentCropOverlay:
+    """
+    Janela em tela cheia transparente para seleção de área de corte.
+    O usuário clica e arrasta para desenhar um retângulo vermelho (bounding box).
+    Ao soltar, fecha a janela e retorna (x, y, largura, altura).
+    """
 
-    def __init__(
-        self,
-        config_manager: ConfigManager,
-        ai_service: AIVisionService,
-        cerebro_manager: CerebroManager,
-        metrics_tracker: MetricsTracker,
-        log_callback: Callable[[str, str], None],
-        status_callback: Callable[[str], None],
-        live_cerebro_callback: Optional[Callable[[QuestionSessionRecord], None]] = None,
-        metrics_update_callback: Optional[Callable[[], None]] = None
-    ):
-        self.config_manager = config_manager
-        self.ai_service = ai_service
-        self.cerebro_manager = cerebro_manager
-        self.metrics_tracker = metrics_tracker
-        self.log_callback = log_callback
-        self.status_callback = status_callback
-        self.live_cerebro_callback = live_cerebro_callback
-        self.metrics_update_callback = metrics_update_callback
+    def __init__(self, master: Optional[tk.Misc], callback: Callable[[int, int, int, int], None]):
+        self.master = master
+        self.callback = callback
+        self.start_x: Optional[int] = None
+        self.start_y: Optional[int] = None
+        self.rect_id: Optional[int] = None
+        self.text_id: Optional[int] = None
 
-        self._thread: Optional[threading.Thread] = None
-        self._stop_event = threading.Event()
-        self._pause_event = threading.Event()
-        self._is_active = False
-
-    @property
-    def is_running(self) -> bool:
-        return self._is_active and not self._pause_event.is_set()
-
-    @property
-    def is_paused(self) -> bool:
-        return self._is_active and self._pause_event.is_set()
-
-    def start(self) -> bool:
-        region = self.config_manager.get("quiz_region", {})
-        if not region.get("configured", False):
-            self.log_callback("ERRO: Calibre a Área do Quiz no menu [⋮] antes de iniciar.", "ERROR")
-            return False
-
-        if not self.config_manager.get_current_api_key():
-            self.log_callback("ERRO: Adicione uma chave Gemini em Configurações > Tokens.", "ERROR")
-            return False
-
-        if self._thread and self._thread.is_alive():
-            if self._pause_event.is_set():
-                self._pause_event.clear()
-                self._set_active_status()
-                self.log_callback("Autopilot retomado.", "INFO")
-                return True
-            return True
-
-        self._stop_event.clear()
-        self._pause_event.clear()
-        self._is_active = True
-        self.metrics_tracker.start_session()
-        self._thread = threading.Thread(target=self._run_loop, daemon=True)
-        self._thread.start()
-        self._set_active_status()
-        self.log_callback("Iniciando Autopilot com Motor Híbrido...", "SUCCESS")
-        return True
-
-    def _set_active_status(self) -> None:
-        if self.config_manager.get("dry_run_mode", False):
-            self.status_callback("SIMULAÇÃO DRY-RUN")
+        if master is not None:
+            self.top = tk.Toplevel(master)
         else:
-            self.status_callback("PRONTO")
+            self.top = tk.Tk()
 
-    def pause(self) -> None:
-        if self._is_active and not self._pause_event.is_set():
-            self._pause_event.set()
-            self.status_callback("PAUSADO")
-            self.log_callback("Autopilot pausado.", "WARNING")
+        # Configurações da Janela em Tela Cheia Translúcida
+        self.top.attributes("-fullscreen", True)
+        self.top.attributes("-topmost", True)
+        self.top.attributes("-alpha", 0.30)
+        self.top.config(cursor="cross")
 
-    def toggle_play_pause(self) -> None:
-        if not self._is_active:
-            self.start()
-        elif self.is_paused:
-            self.start()
+        # Canvas escuro para contraste nítido
+        self.canvas = tk.Canvas(self.top, bg="#0A0A0A", highlightthickness=0)
+        self.canvas.pack(fill=tk.BOTH, expand=True)
+
+        screen_w = self.top.winfo_screenwidth()
+        screen_h = self.top.winfo_screenheight()
+
+        # Banner de instrução no topo
+        self.canvas.create_rectangle(
+            screen_w // 2 - 320, 25, screen_w // 2 + 320, 75,
+            fill="#141414", outline="#FF0033", width=2
+        )
+        self.canvas.create_text(
+            screen_w // 2, 50,
+            text="CLIQUE E ARRASTE O MOUSE PARA DEFINIR A ÁREA DO QUIZ  |  [ESC] Cancelar",
+            fill="#FFFFFF",
+            font=("Segoe UI", 12, "bold")
+        )
+
+        # Bindings de mouse e teclado
+        self.canvas.bind("<ButtonPress-1>", self._on_mouse_down)
+        self.canvas.bind("<B1-Motion>", self._on_mouse_drag)
+        self.canvas.bind("<ButtonRelease-1>", self._on_mouse_up)
+        self.top.bind("<Escape>", lambda e: self._close())
+
+    def _on_mouse_down(self, event: tk.Event) -> None:
+        self.start_x = event.x
+        self.start_y = event.y
+        if self.rect_id:
+            self.canvas.delete(self.rect_id)
+        if self.text_id:
+            self.canvas.delete(self.text_id)
+
+        # Retângulo com contorno vermelho brilhante (#FF0033)
+        self.rect_id = self.canvas.create_rectangle(
+            self.start_x, self.start_y, self.start_x, self.start_y,
+            outline="#FF0033", width=3, fill="#FF0033", stipple="gray25"
+        )
+
+    def _on_mouse_drag(self, event: tk.Event) -> None:
+        if self.start_x is None or self.start_y is None or self.rect_id is None:
+            return
+
+        cur_x, cur_y = event.x, event.y
+        self.canvas.coords(self.rect_id, self.start_x, self.start_y, cur_x, cur_y)
+
+        width = abs(cur_x - self.start_x)
+        height = abs(cur_y - self.start_y)
+        label_text = f"{width} x {height} px"
+
+        label_x = max(self.start_x, cur_x) + 5
+        label_y = max(self.start_y, cur_y) + 20
+
+        if self.text_id:
+            self.canvas.coords(self.text_id, label_x, label_y)
+            self.canvas.itemconfig(self.text_id, text=label_text)
         else:
-            self.pause()
+            self.text_id = self.canvas.create_text(
+                label_x, label_y,
+                text=label_text, fill="#FF0033", font=("Segoe UI", 11, "bold"), anchor="w"
+            )
 
-    def stop(self) -> None:
-        self._stop_event.set()
-        self._pause_event.clear()
-        self._is_active = False
-        self.status_callback("PARADO")
-        self.log_callback("Autopilot interrompido pelo usuário.", "INFO")
+    def _on_mouse_up(self, event: tk.Event) -> None:
+        if self.start_x is None or self.start_y is None:
+            self._close()
+            return
 
-    def _play_beep(self) -> None:
-        """Toca um bip sutil caso o feedback sonoro esteja habilitado."""
-        if self.config_manager.get("sound_feedback", True) and winsound:
-            try:
-                winsound.Beep(980, 120)
-            except Exception:
-                pass
+        end_x, end_y = event.x, event.y
+        x1 = min(self.start_x, end_x)
+        y1 = min(self.start_y, end_y)
+        x2 = max(self.start_x, end_x)
+        y2 = max(self.start_y, end_y)
 
-    def _run_loop(self) -> None:
-        question_idx = 0
+        width = x2 - x1
+        height = y2 - y1
 
-        while not self._stop_event.is_set():
-            if self._pause_event.is_set():
-                time.sleep(0.2)
-                continue
+        self._close()
 
-            question_idx += 1
-            self.metrics_tracker.start_question()
-            if self.metrics_update_callback:
-                self.metrics_update_callback()
+        # Validação mínima de área
+        if width > 30 and height > 30:
+            print(f"[RPA] Área de Quiz selecionada: X={x1}, Y={y1}, Largura={width}, Altura={height}")
+            self.callback(x1, y1, width, height)
+        else:
+            print("[RPA] Seleção descartada (área muito pequena).")
 
-            is_dry_run = self.config_manager.get("dry_run_mode", False)
-            mode_tag = "[DRY-RUN]" if is_dry_run else "[AUTOPILOT]"
-            self.log_callback(f"─── {mode_tag} Escaneando Questão #{question_idx} ───", "INFO")
+    def _close(self) -> None:
+        try:
+            self.top.destroy()
+        except Exception:
+            pass
 
-            try:
-                # 1. Captura da Tela via mss
-                region = self.config_manager.get("quiz_region", {})
-                x = int(region.get("x", 0))
-                y = int(region.get("y", 0))
-                w = int(region.get("width", 100))
-                h = int(region.get("height", 100))
 
-                self.status_callback("ANALISANDO")
-                self.log_callback(f"Capturando região ({w}x{h} px)...", "INFO")
-                screenshot_pil = self._capture_region(x, y, w, h)
+class NextButtonTargetOverlay:
+    """
+    Overlay interativo para mapear com precisão a coordenada (X, Y) do botão Próximo.
+    """
 
-                if self._stop_event.is_set():
-                    break
+    def __init__(self, master: Optional[tk.Misc], callback: Callable[[int, int], None]):
+        self.master = master
+        self.callback = callback
 
-                # 2. RAG Local & Consulta à IA
-                rag_context = self.cerebro_manager.get_rag_context("análise inicial da tela")
-                model_name = self.config_manager.get("model_name", "gemini-2.5-flash")
-                self.log_callback(f"Consultando IA ({model_name})...", "INFO")
+        if master is not None:
+            self.top = tk.Toplevel(master)
+        else:
+            self.top = tk.Tk()
 
-                result: VisionAnalysisResult = self.ai_service.analyze_quiz_image(screenshot_pil, rag_context)
+        self.top.attributes("-fullscreen", True)
+        self.top.attributes("-topmost", True)
+        self.top.attributes("-alpha", 0.30)
+        self.top.config(cursor="crosshair")
 
-                if self._stop_event.is_set():
-                    break
+        self.canvas = tk.Canvas(self.top, bg="#0A0A0A", highlightthickness=0)
+        self.canvas.pack(fill=tk.BOTH, expand=True)
 
-                if not result.success:
-                    self.log_callback(f"Falha na IA: {result.error_message}", "ERROR")
-                    self._interruptible_sleep(3.5)
-                    continue
+        screen_w = self.top.winfo_screenwidth()
 
-                # 3. Recorte de Elemento Visual
-                recorte: Optional[Image.Image] = None
-                if result.possui_elemento_visual:
-                    bb = result.bounding_box_elemento
-                    ymin, xmin, ymax, xmax = bb.get("ymin", 0), bb.get("xmin", 0), bb.get("ymax", 0), bb.get("xmax", 0)
-                    if ymax > ymin and xmax > xmin:
-                        crop_box = (int(xmin * w), int(ymin * h), int(xmax * w), int(ymax * h))
-                        recorte = screenshot_pil.crop(crop_box)
-                    else:
-                        recorte = screenshot_pil.copy()
-                else:
-                    recorte = screenshot_pil.copy()
+        self.canvas.create_rectangle(
+            screen_w // 2 - 320, 25, screen_w // 2 + 320, 75,
+            fill="#141414", outline="#00E5FF", width=2
+        )
+        self.canvas.create_text(
+            screen_w // 2, 50,
+            text="CLIQUE EXATAMENTE EM CIMA DO BOTÃO 'PRÓXIMO / VERIFICAR'  |  [ESC] Cancelar",
+            fill="#00E5FF",
+            font=("Segoe UI", 12, "bold")
+        )
 
-                # 4. Cálculo de Coordenadas Globais do Monitor
-                coord_norm = result.coordenadas_resposta
-                click_x = x + int(coord_norm["x_norm"] * w)
-                click_y = y + int(coord_norm["y_norm"] * h)
+        self.canvas.bind("<Button-1>", self._on_click)
+        self.top.bind("<Escape>", lambda e: self._close())
 
-                # 5. Persistência Física no Cérebro (Pastas, Rationale, Mídias)
-                session_record = self.cerebro_manager.record_question_session(
-                    pergunta=result.pergunta_extraida,
-                    resposta=result.alternativa_correta,
-                    rationale=result.rationale,
-                    confianca=result.confianca,
-                    possui_elemento_visual=result.possui_elemento_visual,
-                    categoria=result.categoria_imagem,
-                    contexto_imagem=result.contexto_imagem,
-                    imagem_recorte=recorte,
-                    coordenadas_clique={"x": click_x, "y": click_y},
-                    prompt_enviado=result.prompt_enviado,
-                    rag_contexto=rag_context,
-                    modelo=model_name,
-                    latencia_ms=result.latencia_ms,
-                    tokens_usados=result.tokens_usados
-                )
+    def _on_click(self, event: tk.Event) -> None:
+        x = event.x_root
+        y = event.y_root
+        self._close()
+        print(f"[RPA] Botão Próximo mapeado na coordenada: X={x}, Y={y}")
+        self.callback(x, y)
 
-                # 6. Atualização de Métricas
-                self.metrics_tracker.finish_question(
-                    question_idx=question_idx,
-                    answer=result.alternativa_correta,
-                    has_visual=result.possui_elemento_visual,
-                    category=result.categoria_imagem,
-                    tokens=result.tokens_usados,
-                    latency_ms=result.latencia_ms
-                )
+    def _close(self) -> None:
+        try:
+            self.top.destroy()
+        except Exception:
+            pass
 
-                # Atualiza tela do Cérebro e Métricas em tempo real
-                if self.live_cerebro_callback:
-                    self.live_cerebro_callback(session_record)
-                if self.metrics_update_callback:
-                    self.metrics_update_callback()
 
-                self.log_callback(f"Cérebro Atualizado: [{result.categoria_imagem}] {result.pergunta_extraida[:50]}...", "SUCCESS")
-                self.log_callback(f"Resposta: {result.alternativa_correta} (Latência: {result.latencia_ms}ms | Tokens: {result.tokens_usados})", "SUCCESS")
+# =============================================================================
+# Funções Principais de Captura e Movimento
+# =============================================================================
 
-                # Feedback Sonoro
-                self._play_beep()
+def open_crop_selector(master: Optional[tk.Misc], callback: Callable[[int, int, int, int], None]) -> None:
+    """Abre a ferramenta de seleção transparente de área da tela."""
+    TransparentCropOverlay(master, callback)
 
-                # 7. Ação de Clique (ou Simulação Dry-Run)
-                if is_dry_run:
-                    self.status_callback("SIMULAÇÃO DRY-RUN")
-                    self.log_callback(f"[DRY-RUN] Simulação ativa: Resposta detectada mas clique ignorado em ({click_x}, {click_y}).", "WARNING")
-                else:
-                    if self.config_manager.get("auto_apply", True):
-                        self.status_callback("RESPONDENDO")
-                        self.log_callback(f"Clicando na alternativa em ({click_x}, {click_y})...", "INFO")
-                        if self.config_manager.get("smooth_mouse", True):
-                            pyautogui.moveTo(click_x, click_y, duration=0.32, tween=pyautogui.easeOutQuad)
-                        else:
-                            pyautogui.moveTo(click_x, click_y)
-                        pyautogui.click()
 
-                # Delay pós-resposta
-                delay = float(self.config_manager.get("action_delay", 2.0))
-                if not self._interruptible_sleep(delay):
-                    break
+def open_next_button_mapper(master: Optional[tk.Misc], callback: Callable[[int, int], None]) -> None:
+    """Abre o mapeador visual do botão Próximo."""
+    NextButtonTargetOverlay(master, callback)
 
-                # 8. Avanço Automático para a Próxima Pergunta
-                auto_adv = self.config_manager.get("auto_advance", True)
-                next_btn = self.config_manager.get("next_button", {})
 
-                if not is_dry_run and auto_adv and next_btn.get("configured", False):
-                    nx = int(next_btn["x"])
-                    ny = int(next_btn["y"])
-                    self.log_callback(f"Avançando no botão Próximo ({nx}, {ny})...", "INFO")
-                    pyautogui.moveTo(nx, ny, duration=0.22, tween=pyautogui.easeOutQuad)
-                    pyautogui.click()
+def capture_screen_region(x: int, y: int, width: int, height: int) -> Image.Image:
+    """
+    Captura instantânea da região demarcada da tela usando mss (alta performance).
+    Retorna objeto PIL.Image.Image RGB em memória.
+    """
+    with mss.mss() as sct:
+        monitor = {
+            "top": int(y),
+            "left": int(x),
+            "width": int(width),
+            "height": int(height)
+        }
+        sct_img = sct.grab(monitor)
+        # Converte BGRA de mss diretamente para RGB do Pillow
+        return Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
 
-                    trans_delay = float(self.config_manager.get("transition_delay", 1.5))
-                    self.log_callback(f"Aguardando carregamento da nova questão ({trans_delay:.1f}s)...", "INFO")
-                    if not self._interruptible_sleep(trans_delay):
-                        break
-                else:
-                    if not self._interruptible_sleep(2.0):
-                        break
 
-            except pyautogui.FailSafeException:
-                self.log_callback("PARADA DE EMERGÊNCIA: Mouse no canto da tela acionou Failsafe!", "ERROR")
-                self.stop()
-                break
-            except Exception as e:
-                self.log_callback(f"Erro no loop de automação: {str(e)}", "ERROR")
-                if not self._interruptible_sleep(3.0):
-                    break
+def smooth_click(
+    x: int,
+    y: int,
+    duration: float = 0.28,
+    clicks: int = 1,
+    button: str = "left"
+) -> None:
+    """
+    Move o cursor até as coordenadas absolutas (x, y) com curva de suavização
+    (easeOutQuad) e executa o clique.
+    """
+    pyautogui.moveTo(x, y, duration=duration, tween=pyautogui.easeOutQuad)
+    pyautogui.click(button=button, clicks=clicks)
 
-        self._is_active = False
-        self.status_callback("PARADO")
 
-    def _capture_region(self, x: int, y: int, width: int, height: int) -> Image.Image:
-        with mss.mss() as sct:
-            mon = {"top": y, "left": x, "width": width, "height": height}
-            sct_img = sct.grab(mon)
-            return Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
+def click_next_button(next_x: int, next_y: int, delay_after: float = 1.5) -> None:
+    """
+    Clica no botão Próximo/Verificar com movimento suave e aguarda o carregamento.
+    """
+    pyautogui.moveTo(next_x, next_y, duration=0.22, tween=pyautogui.easeOutQuad)
+    pyautogui.click()
+    if delay_after > 0:
+        time.sleep(delay_after)
 
-    def _interruptible_sleep(self, seconds: float) -> bool:
-        steps = int(seconds / 0.1)
-        for _ in range(steps):
-            if self._stop_event.is_set():
-                return False
-            time.sleep(0.1)
-        rem = seconds - (steps * 0.1)
-        if rem > 0:
-            time.sleep(rem)
-        return not self._stop_event.is_set()
+
+def type_humanized(text: str, min_delay_ms: int = 25, max_delay_ms: int = 75) -> None:
+    """
+    Digita um texto simulando a velocidade e cadência humana
+    com micro-variações em milissegundos entre cada caractere.
+    """
+    for char in text:
+        pyautogui.write(char)
+        sleep_sec = random.uniform(min_delay_ms / 1000.0, max_delay_ms / 1000.0)
+        time.sleep(sleep_sec)
