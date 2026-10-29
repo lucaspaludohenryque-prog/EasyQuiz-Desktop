@@ -1,33 +1,44 @@
-# Byte-compiled / optimized / DLL files
+﻿# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
 
-# PyInstaller / Packaging
+# PyInstaller / Packaging / Compilação .exe
 build/
 dist/
 *.spec
+*.exe
 
-# Local Environment and Secrets
-config.json
-*.tmp
-.env
+# Ambientes Virtuais Python
 .venv/
 venv/
 ENV/
+env/
+env.bak/
+venv.bak/
 
-# OS and IDE Artifacts
+# Configurações e Segredos Locais
+config.json
+config.json.tmp
+*.tmp
+.env
+.env.local
+
+# Pasta Física de Dados Locais do Cérebro
+brain_storage/
+Cerebro_Dados/Sessoes_Contexto/
+Cerebro_Dados/Midia_Contextualizada/
+*.db
+*.sqlite
+*.sqlite3
+*.db-wal
+*.db-shm
+
+# Artefatos de Sistema e IDEs
 .vscode/
 .idea/
 Thumbs.db
 desktop.ini
 *.log
-
-# Brain Local Storage & Folders
-brain_storage/
-Cerebro_Dados/
-*.db
-*.db-wal
-*.db-shm
-
-
+*.bak
